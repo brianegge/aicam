@@ -152,11 +152,12 @@ async def main(options: argparse.Namespace) -> None:
     )
     sd.notify("STATUS=Loaded models")
 
+    blueiris_url = config.get("blueiris", "url", fallback=None)
     cams = []
     i = 0
     while "cam%d" % i in config.sections():
         cams.append(
-            Camera(config["cam%d" % i], excludes.get(config["cam%d" % i]["name"], {}), mqtt_client)
+            Camera(config["cam%d" % i], excludes.get(config["cam%d" % i]["name"], {}), mqtt_client, blueiris_url)
         )
         i += 1
     log.info("Configured %i cams" % i)

@@ -13,5 +13,5 @@ paho-mqtt
 onnx @ git+https://github.com/onnx/onnx.git@cdaa8a8e87c88842062f899e2cf747e642c6b3e4
 onnx-tensorrt==0.1.0
 # https://developer.nvidia.com/blog/announcing-onnx-runtime-for-jetson/
-onnxruntime==1.3.0
+onnxruntime==1.24.3
 

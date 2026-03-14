@@ -1,0 +1,19 @@
+[Unit]
+Description=AI Cam Roboflow review upload server
+After=multi-user.target
+StartLimitIntervalSec=0
+
+[Service]
+Restart=always
+RestartSec=10
+User=egge
+WorkingDirectory=/home/egge/detector/simplescan
+ExecStart=/home/egge/detector/bin/python3 -u /home/egge/detector/simplescan/roboflow_upload.py --port 5050
+Environment=PYTHONUNBUFFERED=true
+MemoryMax=256M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aicam-review
+
+[Install]
+WantedBy=default.target

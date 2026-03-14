@@ -1,0 +1,30 @@
+[Unit]
+Description=Process ip cameras
+After=multi-user.target
+StartLimitIntervalSec=0
+#RequiresMountsFor=/mnt/elements/capture
+
+[Service]
+Restart=always
+RestartSec=60
+User=egge
+WorkingDirectory=/home/egge/detector/simplescan
+ExecStart=/home/egge/detector/bin/python3 -u /home/egge/detector/simplescan/main.py --trt
+Environment=PYTHONUNBUFFERED=true
+Environment=OPENBLAS_CORETYPE=ARMV8
+Environment=PYTHONPATH=/usr/lib/python3.6/dist-packages
+# Note that we use Type=notify here since simple.py will send "READY=1"
+# when it's finished starting up
+Type=notify
+Restart=always
+TimeoutStartSec=10min
+WatchdogSec=5min
+MemoryMax=3G
+#StandardOutput=append:/var/log/aicam-console.log
+#StandardError=append:/var/log/aicam-console.log
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aicam
+
+[Install]
+WantedBy=default.target

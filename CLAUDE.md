@@ -1,14 +1,13 @@
-# Detector (aicam)
+# aicam
 
 ## Deployment
 - Runs on **egge-nano** (Jetson Nano)
 - SSH: `ssh egge@egge-nano.home`
-- Code deployed at: `/home/egge/detector/`
+- Code deployed at: `/home/egge/aicam/`
 - Python venv: `/home/egge/detector/bin/python3`
-- Working directory: `/home/egge/detector/simplescan`
-- Config file: passed via CLI args to main.py
+- Config file: `/home/egge/aicam/config.txt`
 
-## Services (systemd user units)
+## Services (systemd system units)
 - `aicam.service` - Main camera detection loop (`main.py --trt`)
 - `aicam-review.service` - Roboflow review upload server (`roboflow_upload.py --port 5050`)
 
@@ -29,5 +28,5 @@ ssh egge@egge-nano.home "sudo systemctl restart aicam"
 
 ## Deploy Changes
 ```bash
-ssh egge@egge-nano.home "cd /home/egge/detector && git pull && sudo systemctl restart aicam"
+ssh egge@egge-nano.home "cd /home/egge/aicam && git pull && sudo systemctl restart aicam"
 ```

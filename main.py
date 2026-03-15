@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta
 from timeit import default_timer as timer
 from typing import Any, Dict
@@ -71,6 +72,9 @@ def on_connect(client: paho.Client, userdata: Any, flags: Dict, rc: int) -> None
     mlog.info("mqtt connected")
     client._reconnect_deadline = None
     client.publish("aicam/status", "online", retain=True)
+    # Subscribe to flag button command topics
+    client.subscribe(f"{DEVICE_ID}/+/flag_vehicle/set")
+    client.subscribe(f"{DEVICE_ID}/+/flag_detection/set")
 
 
 def on_disconnect(client: paho.Client, userdata: Any, rc: int) -> None:
@@ -82,9 +86,61 @@ def on_disconnect(client: paho.Client, userdata: Any, rc: int) -> None:
 
 
 def on_message(
-    self: Any, mqtt_client: paho.Client, obj: Any, msg: paho.MQTTMessage
+    client: paho.Client, userdata: Any, msg: paho.MQTTMessage
 ) -> None:
-    mlog.info("on_message()")
+    """Handle MQTT button presses for flagging images for Roboflow review."""
+    mlog.info("on_message: %s = %s", msg.topic, msg.payload)
+    # Expected topic: aicam/{cam_ha_name}/flag_{model}/set
+    parts = msg.topic.split("/")
+    if len(parts) != 4 or parts[0] != DEVICE_ID or parts[3] != "set":
+        return
+    cam_ha_name = parts[1]
+    flag_type = parts[2]  # flag_vehicle or flag_detection
+
+    cams_map = getattr(client, "_aicam_cams", {})
+    config = getattr(client, "_aicam_config", None)
+    cam = cams_map.get(cam_ha_name)
+    if cam is None or config is None:
+        mlog.warning("Flag request for unknown camera: %s", cam_ha_name)
+        return
+    if cam.image is None:
+        mlog.warning("No image available for %s", cam.name)
+        return
+    if "roboflow" not in config:
+        mlog.warning("No [roboflow] config, cannot flag image")
+        return
+
+    try:
+        import cv2
+        from PIL import Image
+        review_dir = os.path.join(config["detector"]["save-path"], "review")
+        os.makedirs(review_dir, exist_ok=True)
+        review_id = uuid.uuid4().hex[:8]
+        review_file = "%s.jpg" % review_id
+        review_path = os.path.join(review_dir, review_file)
+        if isinstance(cam.image, Image.Image):
+            cam.image.save(review_path)
+        else:
+            cv2.imwrite(review_path, cam.image)
+
+        if flag_type == "flag_vehicle":
+            model = "vehicle"
+            tags = "vehicle,package"
+        else:
+            model = "detection"
+            tags = ",".join(sorted(cam.mqtt))
+
+        webhook_url = config["roboflow"].get("webhook-url", "http://localhost:5050")
+        upload_url = "%s/upload" % webhook_url.rstrip("/")
+        resp = requests.post(upload_url, json={
+            "file": review_file,
+            "model": model,
+            "cam": cam.name.replace(" ", "_"),
+            "tags": tags,
+        }, timeout=30)
+        mlog.info("Flag upload for %s/%s: %s %s", cam.name, flag_type, resp.status_code, resp.text)
+    except Exception:
+        mlog.exception("Failed to flag image for %s", cam.name)
 
 
 class GracefulKiller:
@@ -122,7 +178,6 @@ async def main(options: argparse.Namespace) -> None:
     except Exception as e:
         log.error(f"Failed to connect to MQTT broker: {e}")
         raise
-    mqtt_client.subscribe("test")  # get on connect messages
     mqtt_client.loop_start()
 
     # Load labels
@@ -261,6 +316,30 @@ async def main(options: argparse.Namespace) -> None:
                 retain=True,
             )
             mqtt_publish(mqtt_client,f"{cam.ha_name}/{item}/count", 0, retain=True)
+        # Publish flag buttons for Roboflow review
+        if "roboflow" in config:
+            for flag_type, flag_label, flag_icon in [
+                ("flag_vehicle", "Flag Vehicle/Package", "mdi:car-alert"),
+                ("flag_detection", "Flag Detection", "mdi:alert-circle-outline"),
+            ]:
+                mqtt_publish(mqtt_client,
+                    f"homeassistant/button/{DEVICE_ID}-{cam.ha_name}-{flag_type}/config",
+                    json.dumps(
+                        {
+                            "name": f"{cam.name} {flag_label}".title(),
+                            "command_topic": f"{DEVICE_ID}/{cam.ha_name}/{flag_type}/set",
+                            "uniq_id": f"{DEVICE_ID}-{cam.ha_name}-{flag_type}",
+                            "availability_topic": lwt,
+                            "icon": flag_icon,
+                            "device": dev,
+                        }
+                    ),
+                    retain=True,
+                )
+
+    # Store references for on_message handler
+    mqtt_client._aicam_cams = {cam.ha_name: cam for cam in cams}
+    mqtt_client._aicam_config = config
 
     sd.notify("READY=1")
     sd.notify("STATUS=Running")

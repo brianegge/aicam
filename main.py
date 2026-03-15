@@ -130,8 +130,8 @@ def on_message(
             model = "detection"
             tags = ",".join(sorted(cam.mqtt))
 
-        webhook_url = config["roboflow"].get("webhook-url", "http://localhost:5050")
-        upload_url = "%s/upload" % webhook_url.rstrip("/")
+        review_port = config["roboflow"].getint("port", 5050)
+        upload_url = "http://localhost:%d/upload" % review_port
         resp = requests.post(upload_url, json={
             "file": review_file,
             "model": model,

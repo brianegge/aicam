@@ -8,7 +8,7 @@ filterpy
 sdnotify
 pytest
 requests
-Pillow==7.2.0
+Pillow==12.1.1
 paho-mqtt
 onnx @ git+https://github.com/onnx/onnx.git@cdaa8a8e87c88842062f899e2cf747e642c6b3e4
 onnx-tensorrt==0.1.0

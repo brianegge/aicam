@@ -1,4 +1,4 @@
-numpy==1.16.6
+numpy==2.4.4
 matplotlib==2.1.1
 aiohttp
 #pysmartthings

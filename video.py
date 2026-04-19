@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import subprocess
 from pprint import pprint
 from tempfile import gettempdir
 
@@ -94,5 +95,7 @@ for path_video in args.input:
         _, img = cap.read()
         frame_count += 1
 vid_writer.release()
-os.system('ffmpeg -y -i "%s" "%s"' % (output_tmp, args.output[0]))
-os.remove(output_tmp)
+try:
+    subprocess.run(["ffmpeg", "-y", "-i", output_tmp, args.output[0]], check=True)
+finally:
+    os.remove(output_tmp)

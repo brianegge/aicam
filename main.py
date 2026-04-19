@@ -68,6 +68,133 @@ def on_publish(client: paho.Client, userdata: Any, mid: int) -> None:
     mlog.debug("on_publish({},{})".format(userdata, mid))
 
 
+def publish_discovery(client: paho.Client) -> None:
+    """Publish HA MQTT discovery configs and initial retained state.
+
+    Called on every (re)connect so the broker's retained store self-heals
+    after a broker restart or retained-message loss. No-op until main()
+    has attached the discovery context to the client.
+    """
+    ctx = getattr(client, "_aicam_discovery_ctx", None)
+    if ctx is None:
+        return
+    cams = ctx["cams"]
+    dev = ctx["dev"]
+    lwt = ctx["lwt"]
+    mqtt_icons = ctx["mqtt_icons"]
+    version = ctx["version"]
+    config = ctx["config"]
+
+    mqtt_publish(client,
+        f"homeassistant/sensor/{DEVICE_ID}-version/config",
+        json.dumps(
+            {
+                "name": "Version",
+                "state_topic": f"{DEVICE_ID}/version",
+                "uniq_id": f"{DEVICE_ID}-version",
+                "availability_topic": lwt,
+                "icon": "mdi:tag",
+                "entity_category": "diagnostic",
+                "device": dev,
+            }
+        ),
+        retain=True,
+    )
+    mqtt_publish(client, f"{DEVICE_ID}/version", version, retain=True)
+
+    mqtt_publish(client,
+        f"homeassistant/sensor/{DEVICE_ID}-status/config",
+        json.dumps(
+            {
+                "name": "Status",
+                "state_topic": f"{DEVICE_ID}/device_status",
+                "uniq_id": f"{DEVICE_ID}-status",
+                "availability_topic": lwt,
+                "icon": "mdi:information-outline",
+                "entity_category": "diagnostic",
+                "device": dev,
+            }
+        ),
+        retain=True,
+    )
+    mqtt_publish(client, f"{DEVICE_ID}/device_status", "running", retain=True)
+
+    mqtt_publish(client,
+        f"homeassistant/sensor/{DEVICE_ID}-cameras/config",
+        json.dumps(
+            {
+                "name": "Camera Count",
+                "state_topic": f"{DEVICE_ID}/camera_count",
+                "uniq_id": f"{DEVICE_ID}-cameras",
+                "availability_topic": lwt,
+                "icon": "mdi:camera",
+                "entity_category": "diagnostic",
+                "device": dev,
+            }
+        ),
+        retain=True,
+    )
+    mqtt_publish(client, f"{DEVICE_ID}/camera_count", len(cams), retain=True)
+
+    for cam in cams:
+        mqtt_publish(client,
+            f"homeassistant/binary_sensor/show-{cam.ha_name}/config",
+            json.dumps(
+                {
+                    "name": f"Show {cam.name}".title(),
+                    "state_topic": f"{cam.ha_name}/show",
+                    "device_class": "occupancy",
+                    "uniq_id": f"show-{cam.ha_name}",
+                    "availability_topic": lwt,
+                    "native_value": "boolean",
+                    "payload_off": False,
+                    "payload_on": True,
+                    "device": dev,
+                }
+            ),
+            retain=True,
+        )
+        mqtt_publish(client, f"{cam.ha_name}/show", False, retain=True)
+        for item in cam.mqtt:
+            mqtt_publish(client,
+                f"homeassistant/sensor/{cam.ha_name}-{item}/config",
+                json.dumps(
+                    {
+                        "name": f"{cam.name} {item} Count".title(),
+                        "state_topic": f"{cam.ha_name}/{item}/count",
+                        "state_class": "measurement",
+                        "uniq_id": f"{cam.ha_name}-{item}",
+                        "availability_topic": lwt,
+                        "icon": mqtt_icons.get(item, f"mdi:{item}"),
+                        "native_value": "int",
+                        "device": dev,
+                    }
+                ),
+                retain=True,
+            )
+            mqtt_publish(client, f"{cam.ha_name}/{item}/count", 0, retain=True)
+        # Publish flag buttons for Roboflow review
+        if "roboflow" in config:
+            for flag_type, flag_label, flag_icon in [
+                ("flag_vehicle", "Flag Vehicle/Package", "mdi:car-alert"),
+                ("flag_detection", "Flag Detection", "mdi:alert-circle-outline"),
+            ]:
+                mqtt_publish(client,
+                    f"homeassistant/button/{DEVICE_ID}-{cam.ha_name}-{flag_type}/config",
+                    json.dumps(
+                        {
+                            "name": f"{cam.name} {flag_label}".title(),
+                            "command_topic": f"{DEVICE_ID}/{cam.ha_name}/{flag_type}/set",
+                            "uniq_id": f"{DEVICE_ID}-{cam.ha_name}-{flag_type}",
+                            "availability_topic": lwt,
+                            "icon": flag_icon,
+                            "device": dev,
+                        }
+                    ),
+                    retain=True,
+                )
+
+
 def on_connect(client: paho.Client, userdata: Any, flags: Dict, rc: int) -> None:
     mlog.info("mqtt connected")
     client._reconnect_deadline = None
@@ -75,6 +202,7 @@ def on_connect(client: paho.Client, userdata: Any, flags: Dict, rc: int) -> None
     # Subscribe to flag button command topics
     client.subscribe(f"{DEVICE_ID}/+/flag_vehicle/set")
     client.subscribe(f"{DEVICE_ID}/+/flag_detection/set")
+    publish_discovery(client)
 
 
 def on_disconnect(client: paho.Client, userdata: Any, rc: int) -> None:
@@ -227,119 +355,20 @@ async def main(options: argparse.Namespace) -> None:
     version = get_version()
     dev = device_info(version)
 
-    # Publish device-level diagnostic sensors
-    mqtt_publish(mqtt_client,
-        f"homeassistant/sensor/{DEVICE_ID}-version/config",
-        json.dumps(
-            {
-                "name": "Version",
-                "state_topic": f"{DEVICE_ID}/version",
-                "uniq_id": f"{DEVICE_ID}-version",
-                "availability_topic": lwt,
-                "icon": "mdi:tag",
-                "entity_category": "diagnostic",
-                "device": dev,
-            }
-        ),
-        retain=True,
-    )
-    mqtt_publish(mqtt_client,f"{DEVICE_ID}/version", version, retain=True)
-
-    mqtt_publish(mqtt_client,
-        f"homeassistant/sensor/{DEVICE_ID}-status/config",
-        json.dumps(
-            {
-                "name": "Status",
-                "state_topic": f"{DEVICE_ID}/device_status",
-                "uniq_id": f"{DEVICE_ID}-status",
-                "availability_topic": lwt,
-                "icon": "mdi:information-outline",
-                "entity_category": "diagnostic",
-                "device": dev,
-            }
-        ),
-        retain=True,
-    )
-    mqtt_publish(mqtt_client,f"{DEVICE_ID}/device_status", "running", retain=True)
-
-    mqtt_publish(mqtt_client,
-        f"homeassistant/sensor/{DEVICE_ID}-cameras/config",
-        json.dumps(
-            {
-                "name": "Camera Count",
-                "state_topic": f"{DEVICE_ID}/camera_count",
-                "uniq_id": f"{DEVICE_ID}-cameras",
-                "availability_topic": lwt,
-                "icon": "mdi:camera",
-                "entity_category": "diagnostic",
-                "device": dev,
-            }
-        ),
-        retain=True,
-    )
-    mqtt_publish(mqtt_client,f"{DEVICE_ID}/camera_count", len(cams), retain=True)
-
-    for cam in cams:
-        mqtt_publish(mqtt_client,
-            f"homeassistant/binary_sensor/show-{cam.ha_name}/config",
-            json.dumps(
-                {
-                    "name": f"Show {cam.name}".title(),
-                    "state_topic": f"{cam.ha_name}/show",
-                    "device_class": "occupancy",
-                    "uniq_id": f"show-{cam.ha_name}",
-                    "availability_topic": lwt,
-                    "native_value": "boolean",
-                    "payload_off": False,
-                    "payload_on": True,
-                    "device": dev,
-                }
-            ),
-            retain=True,
-        )
-        mqtt_publish(mqtt_client,f"{cam.ha_name}/show", False, retain=True)
-        for item in cam.mqtt:
-            mqtt_publish(mqtt_client,
-                f"homeassistant/sensor/{cam.ha_name}-{item}/config",
-                json.dumps(
-                    {
-                        "name": f"{cam.name} {item} Count".title(),
-                        "state_topic": f"{cam.ha_name}/{item}/count",
-                        "state_class": "measurement",
-                        "uniq_id": f"{cam.ha_name}-{item}",
-                        "availability_topic": lwt,
-                        "icon": mqtt_icons.get(item, f"mdi:{item}"),
-                        "native_value": "int",
-                        "device": dev,
-                    }
-                ),
-                retain=True,
-            )
-            mqtt_publish(mqtt_client,f"{cam.ha_name}/{item}/count", 0, retain=True)
-        # Publish flag buttons for Roboflow review
-        if "roboflow" in config:
-            for flag_type, flag_label, flag_icon in [
-                ("flag_vehicle", "Flag Vehicle/Package", "mdi:car-alert"),
-                ("flag_detection", "Flag Detection", "mdi:alert-circle-outline"),
-            ]:
-                mqtt_publish(mqtt_client,
-                    f"homeassistant/button/{DEVICE_ID}-{cam.ha_name}-{flag_type}/config",
-                    json.dumps(
-                        {
-                            "name": f"{cam.name} {flag_label}".title(),
-                            "command_topic": f"{DEVICE_ID}/{cam.ha_name}/{flag_type}/set",
-                            "uniq_id": f"{DEVICE_ID}-{cam.ha_name}-{flag_type}",
-                            "availability_topic": lwt,
-                            "icon": flag_icon,
-                            "device": dev,
-                        }
-                    ),
-                    retain=True,
-                )
-
     # Store references for on_message handler
     mqtt_client._aicam_cams = {cam.ha_name: cam for cam in cams}
     mqtt_client._aicam_config = config
+    # Attach discovery context so publish_discovery() (called from on_connect)
+    # can re-assert the retained store on every (re)connect.
+    mqtt_client._aicam_discovery_ctx = {
+        "cams": cams,
+        "dev": dev,
+        "lwt": lwt,
+        "mqtt_icons": mqtt_icons,
+        "version": version,
+        "config": config,
+    }
+    publish_discovery(mqtt_client)
 
     sd.notify("READY=1")
     sd.notify("STATUS=Running")

@@ -50,9 +50,9 @@ class ONNXTensorRTv4ObjectDetection(ObjectDetection):
         # Use shared CUDA context
         self.cfx = _cuda_context
         """Attempts to load a serialized engine if available, otherwise builds a new TensorRT engine and saves it."""
-        if os.path.exists(engine_file_path) and os.path.getctime(
+        if os.path.exists(engine_file_path) and os.path.getmtime(
             engine_file_path
-        ) > os.path.getctime(model_filename):
+        ) > os.path.getmtime(model_filename):
             # If a serialized engine exists, use it instead of building an engine.
             logger.info(
                 "Reading engine from file {} for classes {}".format(

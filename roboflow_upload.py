@@ -8,6 +8,7 @@ Python 3.6 compatible (runs on Jetson Nano).
 """
 import argparse
 import base64
+import html
 import json
 import logging
 import os
@@ -21,9 +22,10 @@ try:
 except ImportError:
     pass
 try:
-    from urllib.parse import urlparse, parse_qs
+    from urllib.parse import urlparse, parse_qs, urlencode
 except ImportError:
     from urlparse import urlparse, parse_qs
+    from urllib import urlencode
 
 logger = logging.getLogger("aicam-review")
 
@@ -83,9 +85,13 @@ def _do_upload(filename, model, cam, detection_tags):
     uploaded = []
 
     for project_id in target_projects:
-        url = "https://api.roboflow.com/dataset/%s/upload?api_key=%s&name=%s&split=train&tag=%s" % (
-            project_id, _config.api_key, name, upload_tags
-        )
+        query = urlencode({
+            "api_key": _config.api_key,
+            "name": name,
+            "split": "train",
+            "tag": upload_tags,
+        })
+        url = "https://api.roboflow.com/dataset/%s/upload?%s" % (project_id, query)
         try:
             req = Request(url, data=encoded.encode("utf-8"), method="POST")
             req.add_header("Content-Type", "application/x-www-form-urlencoded")
@@ -135,14 +141,15 @@ class UploadHandler(BaseHTTPRequestHandler):
         if code == 200:
             title = "Image Flagged for Review"
             body = "<p>Uploaded <b>%s</b> from <b>%s</b> to %s.</p>" % (
-                filename, cam.replace("_", " "),
-                ", ".join(result["projects"]),
+                html.escape(filename),
+                html.escape(cam.replace("_", " ")),
+                html.escape(", ".join(result["projects"])),
             )
         else:
             title = "Upload Failed"
-            body = "<p>%s</p>" % result.get("error", "unknown error")
+            body = "<p>%s</p>" % html.escape(result.get("error", "unknown error"))
 
-        html = (
+        doc = (
             "<!DOCTYPE html><html><head>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<title>%s</title>"
@@ -152,12 +159,12 @@ class UploadHandler(BaseHTTPRequestHandler):
             "</head><body>"
             "<h2 class='%s'>%s</h2>%s"
             "</body></html>"
-        ) % ("ok" if code == 200 else "err", title, title, body)
+        ) % (html.escape(title), "ok" if code == 200 else "err", html.escape(title), body)
 
         self.send_response(code)
         self.send_header("Content-Type", "text/html")
         self.end_headers()
-        self.wfile.write(html.encode("utf-8"))
+        self.wfile.write(doc.encode("utf-8"))
 
     def do_POST(self):
         if self.path != "/upload":

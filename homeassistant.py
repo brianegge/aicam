@@ -41,6 +41,7 @@ class HomeAssistant:
             f"{self.api}services/scene/turn_on",
             json={"entity_id": f"scene.{scene}"},
             headers=self.headers,
+            timeout=10,
         )
         log.info(f"Turned on scene {scene}={r}")
         return r
@@ -54,7 +55,7 @@ class HomeAssistant:
             "variables": {"location": location},
         }
         r = requests.post(
-            f"{self.api}services/script/turn_on", json=json, headers=self.headers
+            f"{self.api}services/script/turn_on", json=json, headers=self.headers, timeout=10
         )
         log.info(f"Deer alert={r}")
 
@@ -67,10 +68,10 @@ class HomeAssistant:
     def get_state(self, entity: str) -> bool:
         try:
             response = requests.get(
-                f"{self.api}states/{entity}", headers=self.headers
+                f"{self.api}states/{entity}", headers=self.headers, timeout=10
             ).json()
             self.cache[entity] = response
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.RequestException:
             if entity not in self.cache:
                 raise RuntimeError(
                     f"Failed to fetch {self.api}states/{entity} and no cached response available"
@@ -93,12 +94,14 @@ class HomeAssistant:
                 f"{self.api}services/input_boolean/turn_on",
                 json=json,
                 headers=self.headers,
+                timeout=10,
             )
         else:
             response = requests.post(
                 f"{self.api}services/input_boolean/turn_off",
                 json=json,
                 headers=self.headers,
+                timeout=10,
             )
         if response.status_code != 200:
             log.warning(f"Set input_boolean {switch} to {state}={response.content}")
@@ -115,7 +118,7 @@ class HomeAssistant:
 
     def get_presence(self, person: str) -> bool:
         response = requests.get(
-            f"{self.api}states/{person}", headers=self.headers
+            f"{self.api}states/{person}", headers=self.headers, timeout=10
         ).json()
         return response["state"] == "home"
 
@@ -136,6 +139,7 @@ class HomeAssistant:
                 f"{self.api}services/notify/alexa_media_kitchen_ecobee4",
                 json=json,
                 headers=self.headers,
+                timeout=10,
             )
             return r.content.decode("utf-8")
         else:
@@ -154,10 +158,10 @@ class HomeAssistant:
         entity = "sensor.rufus_status"
         try:
             response = requests.get(
-                f"{self.api}states/{entity}", headers=self.headers
+                f"{self.api}states/{entity}", headers=self.headers, timeout=10
             ).json()
             self.cache[entity] = response
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.RequestException:
             if entity not in self.cache:
                 raise RuntimeError(
                     f"Failed to fetch {entity} and no cached response available"
@@ -185,6 +189,7 @@ class HomeAssistant:
             f"{self.api}services/script/turn_on",
             json={"entity_id": "script.pause_person_detector"},
             headers=self.headers,
+            timeout=10,
         )
         return r.content.decode("utf-8")
 
@@ -198,6 +203,7 @@ class HomeAssistant:
                 f"{self.api}services/script/turn_on",
                 json={"entity_id": "script.house_cleaners_arrive"},
                 headers=self.headers,
+                timeout=10,
             )
             log.info(f"Run script house cleaners arrive={r}")
             self.last_house_cleaners_arrived = datetime.datetime.now()

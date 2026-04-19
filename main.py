@@ -301,12 +301,12 @@ async def main(options: argparse.Namespace) -> None:
     mqtt_client._reconnect_deadline = None
     mqtt_config = config["mqtt"]
     mqtt_client.username_pw_set(mqtt_config["user"], mqtt_config["password"])
-    try:
-        mqtt_client.connect(mqtt_config["host"], mqtt_config.getint("port", 1883), keepalive=60)
-    except Exception as e:
-        log.error(f"Failed to connect to MQTT broker: {e}")
-        raise
-    mqtt_client.loop_start()
+    # connect_async queues the connection; loop_start (below, after the
+    # discovery ctx is attached) actually performs the connect and processes
+    # CONNACK. This guarantees the first on_connect fires with ctx in place
+    # so publish_discovery() can do its work, instead of no-op'ing because
+    # the network thread raced ahead of the ctx assignment.
+    mqtt_client.connect_async(mqtt_config["host"], mqtt_config.getint("port", 1883), keepalive=60)
 
     # Load labels
     with open(detector_config["labelfile-path"], "r") as f:
@@ -358,8 +358,8 @@ async def main(options: argparse.Namespace) -> None:
     # Store references for on_message handler
     mqtt_client._aicam_cams = {cam.ha_name: cam for cam in cams}
     mqtt_client._aicam_config = config
-    # Attach discovery context so publish_discovery() (called from on_connect)
-    # can re-assert the retained store on every (re)connect.
+    # Attach discovery context so publish_discovery() (called from on_connect
+    # on every reconnect) can re-assert the retained store.
     mqtt_client._aicam_discovery_ctx = {
         "cams": cams,
         "dev": dev,
@@ -368,7 +368,9 @@ async def main(options: argparse.Namespace) -> None:
         "version": version,
         "config": config,
     }
-    publish_discovery(mqtt_client)
+    # Start the network loop only now that the ctx is attached, so the
+    # first on_connect (and every reconnect) can publish discovery.
+    mqtt_client.loop_start()
 
     sd.notify("READY=1")
     sd.notify("STATUS=Running")

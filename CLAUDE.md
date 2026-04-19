@@ -1,10 +1,11 @@
 # aicam
 
 ## Deployment
-- Runs on **egge-nano** (Jetson Nano)
+- Runs on **egge-nano** (Jetson Nano, Python 3.6.9)
 - SSH: `ssh egge@egge-nano.home`
-- Code deployed at: `/home/egge/aicam/`
-- Python venv: `/home/egge/detector/bin/python3`
+- Code deployed at: `/home/egge/aicam/` (clone of this repo)
+- Python venv: `/home/egge/detector/bin/python3` — lives in a separate fork (`brianegge/yolov3` at `/home/egge/detector/`) that only provides the interpreter + site-packages; the aicam source tree is not inside it.
+- aicam.service ExecStart: `/home/egge/detector/bin/python3 -u /home/egge/aicam/main.py --trt`
 - Config file: `/home/egge/aicam/config.txt`
 
 ## Services (systemd system units)

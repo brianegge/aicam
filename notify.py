@@ -5,6 +5,7 @@ import uuid
 from datetime import date, datetime
 from io import BytesIO
 from pprint import pformat
+from urllib.parse import urlencode
 
 import cv2
 import requests
@@ -426,10 +427,14 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
                 review_image.save(os.path.join(review_dir, review_file))
                 webhook_url = config["roboflow"]["webhook-url"]
                 detection_tags = set(p["tagName"] for p in predictions if "ignore" not in p)
-                pushover_data["url"] = "%s?file=%s&model=%s&cam=%s&tags=%s" % (
-                    webhook_url, review_file, model_name,
-                    cam.name.replace(" ", "_"),
-                    ",".join(sorted(detection_tags)),
+                separator = "&" if "?" in webhook_url else "?"
+                pushover_data["url"] = webhook_url + separator + urlencode(
+                    {
+                        "file": review_file,
+                        "model": model_name,
+                        "cam": cam.name.replace(" ", "_"),
+                        "tags": ",".join(sorted(detection_tags)),
+                    }
                 )
                 pushover_data["url_title"] = "Flag for Review"
             except Exception:

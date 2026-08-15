@@ -1,5 +1,5 @@
 numpy==2.5.2
-matplotlib==2.1.1
+matplotlib==3.11.1
 aiohttp
 #pysmartthings
 opencv-python

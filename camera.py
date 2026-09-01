@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
@@ -17,17 +18,24 @@ from utils import cleanup
 logger = logging.getLogger(__name__)
 
 # One Blue Iris host serves frames for every camera, and captures run
-# concurrently from a thread pool, so share a session with a pool sized for it.
-_bi_session = None
+# concurrently from a thread pool. Built fully at import time so pool threads
+# never race a lazy init or see the session before the adapter is mounted.
+_bi_adapter = requests.adapters.HTTPAdapter(pool_connections=1, pool_maxsize=32)
+_bi_session = requests.Session()
+_bi_session.mount("http://", _bi_adapter)
+_bi_session.mount("https://", _bi_adapter)
 
-
-def _blueiris_session():
-    global _bi_session
-    if _bi_session is None:
-        _bi_session = requests.Session()
-        adapter = requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=20)
-        _bi_session.mount("http://", adapter)
-    return _bi_session
+# Circuit breaker for the shared BI host: without it, a BI outage makes all
+# cameras each burn the 10s BI timeout before their direct fallback, every
+# cycle. Races on these globals are benign (worst case one extra probe).
+_bi_fail_count = 0
+_bi_skip_until = 0.0
+BI_BREAKER_FAILURES = 3
+BI_BREAKER_SECONDS = 60.0
+# Consecutive identical frames before declaring the stream into BI frozen.
+# The cameras stamp an OSD clock into every frame, so identical bytes should
+# mean frozen — the margin covers a truly static re-encode.
+BI_FROZEN_THRESHOLD = 3
 
 
 class Camera:
@@ -56,14 +64,18 @@ class Camera:
         self.ftp_path = config.get("ftp-path", None)
         self.interval = config.getint("interval", 30)
         self.session = None
+        # BI-only freshness state: self.image_hash is shared with the direct
+        # and FTP paths, and comparing across sources de-arms the check.
+        self.bi_hash = None
+        self.bi_dups = 0
         self.mqtt = set(config.get("mqtt", "").split(","))
         self.mqtt_client = mqtt_client
         if blueiris_url:
             bi_name = config.get("blueiris-name", self._default_blueiris_name())
-            # w/h pin the output size: /image otherwise follows whatever
-            # streaming profile is active, which can dip below the 608x608
-            # model input. Blue Iris fits within the box preserving aspect.
-            self.blueiris_uri = f"{blueiris_url}/image/{bi_name}?q=85&w=1920&h=1080"
+            # q=100 and no size cap: notify.py crops self.image at native
+            # resolution for plate recognition, so quality and size here are
+            # not just about the 608x608 model input.
+            self.blueiris_uri = f"{blueiris_url}/image/{bi_name}?q=100"
         else:
             self.blueiris_uri = None
         road_line_raw = config.get("road_line", None)
@@ -205,38 +217,72 @@ class Camera:
     def _capture_blueiris(self):
         """Grab the latest decoded frame from Blue Iris.
 
-        Returns True when a frame was handled (including a duplicate, which
-        marks a frozen stream); False means the caller should fall back to a
-        direct camera snapshot.
+        Returns True only when self.image now holds a usable BI frame. False
+        on any failure — including a stream frozen for BI_FROZEN_THRESHOLD
+        cycles — means the caller should try the camera directly.
         """
+        global _bi_fail_count, _bi_skip_until
+        if time.monotonic() < _bi_skip_until:
+            return False
         try:
-            resp = _blueiris_session().get(self.blueiris_uri, timeout=10)
+            resp = _bi_session.get(self.blueiris_uri, timeout=10)
             resp.raise_for_status()
-            bytes = np.asarray(bytearray(resp.content), dtype="uint8")
-            if len(bytes) == 0:
+            content = resp.content
+            if len(content) == 0:
                 logger.warning(f"Blue Iris returned empty image for {self.name}")
                 return False
-            image = cv2.imdecode(bytes, cv2.IMREAD_UNCHANGED)
+        except Exception:
+            _bi_fail_count += 1
+            if _bi_fail_count >= BI_BREAKER_FAILURES:
+                _bi_skip_until = time.monotonic() + BI_BREAKER_SECONDS
+                logger.warning(
+                    "Blue Iris down (%d straight failures) — direct snapshots for %ds",
+                    _bi_fail_count,
+                    int(BI_BREAKER_SECONDS),
+                )
+            else:
+                logger.warning(
+                    f"Blue Iris capture failed for {self.name}, falling back to camera: {sys.exc_info()[1]}"
+                )
+            return False
+        _bi_fail_count = 0
+        # Hash the raw response before decoding: cheap, and it lets a frozen
+        # stream short-circuit ahead of the decode. Tracked in a BI-only
+        # field — the direct and FTP paths write self.image_hash, and sharing
+        # it would de-arm this check after every fallback.
+        content_hash = hashlib.md5(content).hexdigest()
+        if content_hash == self.bi_hash:
+            self.bi_dups += 1
+            if self.bi_dups >= BI_FROZEN_THRESHOLD:
+                if self.bi_dups == BI_FROZEN_THRESHOLD:
+                    logger.warning(
+                        f"Blue Iris frame for {self.name} unchanged {self.bi_dups} cycles (frozen stream?) — using direct snapshots"
+                    )
+                return False
+        else:
+            self.bi_hash = content_hash
+            self.bi_dups = 0
+        try:
+            image = cv2.imdecode(np.frombuffer(content, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
             if image is None:
                 logger.warning(f"Blue Iris returned undecodable image for {self.name}")
                 return False
-            image_hash = hashlib.md5(image.tobytes()).hexdigest()
-            if image_hash == self.image_hash:
-                # The camera streams continuously, so an identical frame means
-                # the stream into Blue Iris is frozen; let the caller try the
-                # camera directly.
-                logger.warning(f"Blue Iris frame for {self.name} is unchanged (frozen stream?)")
-                return False
             self.image = image
-            self.image_hash = image_hash
             self.source = self.blueiris_uri
             self.resize()
-            self.error = None
-            self.fails = 0
-            return True
         except Exception:
-            logger.warning(f"Blue Iris capture failed for {self.name}, falling back to camera: {sys.exc_info()[1]}")
+            # Leave no partial state behind: the caller's direct-path
+            # escalation counts failures via `self.image is None`.
+            self.image = None
+            self.resized = None
+            self.resized2 = None
+            logger.warning(
+                f"Blue Iris frame for {self.name} failed to process: {sys.exc_info()[1]}"
+            )
             return False
+        self.error = None
+        self.fails = 0
+        return True
 
     def _get_session(self):
         if self.session is None:

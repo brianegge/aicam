@@ -16,6 +16,8 @@ jobs:
           python-version: "3.10"
       - name: Check Python syntax
         run: python -m py_compile main.py detect.py camera.py notify.py homeassistant.py roboflow_upload.py utils.py
+      - name: Check syntax against Python 3.6 (deployment target on egge-nano)
+        run: docker run --rm -v "$PWD":/app -w /app python:3.6-slim python -m py_compile main.py detect.py camera.py notify.py homeassistant.py roboflow_upload.py utils.py
 
   test:
     runs-on: ubuntu-latest

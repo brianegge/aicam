@@ -58,7 +58,7 @@ def _response(content, status=200):
 
 def test_default_blueiris_name_strips_cam_suffix():
     cam = _make_camera()
-    assert cam.blueiris_uri == "http://blueiris-3.home:81/image/test?q=100"
+    assert cam.blueiris_uri == "http://blueiris-3.home:81/image/test?q=100&s=100"
 
 
 def test_blueiris_name_override():

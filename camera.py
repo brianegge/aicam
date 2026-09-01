@@ -72,10 +72,14 @@ class Camera:
         self.mqtt_client = mqtt_client
         if blueiris_url:
             bi_name = config.get("blueiris-name", self._default_blueiris_name())
-            # q=100 and no size cap: notify.py crops self.image at native
-            # resolution for plate recognition, so quality and size here are
-            # not just about the 608x608 model input.
-            self.blueiris_uri = f"{blueiris_url}/image/{bi_name}?q=100"
+            # q=100&s=100: notify.py crops self.image at native resolution
+            # for push notifications and plate recognition, so size here is
+            # not just about the 608x608 model input. Without s=100 BI caps
+            # /image at ~1920 wide even when it has the 4K main stream
+            # decoded. Caveat: when BI is "limit decoding" a camera it only
+            # has the substream (e.g. 856x480), and s=100 cannot upscale —
+            # the frame is whatever BI is currently decoding.
+            self.blueiris_uri = f"{blueiris_url}/image/{bi_name}?q=100&s=100"
         else:
             self.blueiris_uri = None
         road_line_raw = config.get("road_line", None)

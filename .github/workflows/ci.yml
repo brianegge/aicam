@@ -16,3 +16,15 @@ jobs:
           python-version: "3.10"
       - name: Check Python syntax
         run: python -m py_compile main.py detect.py camera.py notify.py homeassistant.py roboflow_upload.py utils.py
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install test dependencies
+        run: pip install pytest opencv-python-headless numpy requests pillow
+      - name: Run tests
+        run: pytest camera_test.py utils_test.py -v

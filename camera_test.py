@@ -2,11 +2,25 @@
 import configparser
 from unittest import mock
 
-import cv2
-import numpy as np
+import pytest
+
+# The documented local test flow runs pytest inside the python:3.6.9
+# container, which deliberately excludes opencv; skip rather than break
+# collection for the whole suite there.
+cv2 = pytest.importorskip("cv2")
+np = pytest.importorskip("numpy")
 
 import camera as camera_mod
 from camera import Camera
+
+
+@pytest.fixture(autouse=True)
+def _reset_bi_breaker():
+    camera_mod._bi_fail_count = 0
+    camera_mod._bi_skip_until = 0.0
+    yield
+    camera_mod._bi_fail_count = 0
+    camera_mod._bi_skip_until = 0.0
 
 
 def _jpeg_bytes(seed=0):
@@ -44,7 +58,7 @@ def _response(content, status=200):
 
 def test_default_blueiris_name_strips_cam_suffix():
     cam = _make_camera()
-    assert cam.blueiris_uri == "http://blueiris-3.home:81/image/test?q=85&w=1920&h=1080"
+    assert cam.blueiris_uri == "http://blueiris-3.home:81/image/test?q=100"
 
 
 def test_blueiris_name_override():
@@ -91,14 +105,67 @@ def test_capture_falls_back_to_direct_when_blueiris_fails():
     assert cam.source == cam.config["uri"]
 
 
-def test_capture_blueiris_duplicate_frame_signals_fallback():
-    """An identical frame from BI means the stream is frozen; fall back."""
+def test_capture_blueiris_frozen_stream_falls_back_after_threshold():
+    """Identical frames tolerate a static scene, then signal frozen."""
     cam = _make_camera()
     content = _jpeg_bytes()
     with mock.patch.object(camera_mod, "_bi_session") as bi:
         bi.get.return_value = _response(content)
-        assert cam._capture_blueiris() is True  # first frame is fresh
-        assert cam._capture_blueiris() is False  # identical frame -> fallback
+        assert cam._capture_blueiris() is True  # fresh
+        # Below the threshold a duplicate is served, not treated as frozen.
+        for _ in range(camera_mod.BI_FROZEN_THRESHOLD - 1):
+            assert cam._capture_blueiris() is True
+        assert cam._capture_blueiris() is False  # frozen -> fall back
+        assert cam._capture_blueiris() is False  # stays frozen
+
+
+def test_capture_blueiris_dup_check_survives_direct_fallback():
+    """The freshness hash must not be de-armed by the direct path writing
+    self.image_hash — the frozen frame stays frozen across a fallback."""
+    cam = _make_camera()
+    content = _jpeg_bytes()
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        bi.get.return_value = _response(content)
+        for _ in range(camera_mod.BI_FROZEN_THRESHOLD):
+            cam._capture_blueiris()
+        # Simulate the direct fallback overwriting the shared hash fields.
+        cam.image_hash = "direct-hash"
+        assert cam._capture_blueiris() is False  # still frozen
+
+
+def test_capture_blueiris_recovers_when_frame_changes():
+    cam = _make_camera()
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        bi.get.return_value = _response(_jpeg_bytes())
+        for _ in range(camera_mod.BI_FROZEN_THRESHOLD + 1):
+            cam._capture_blueiris()
+        bi.get.return_value = _response(_jpeg_bytes(seed=9))
+        assert cam._capture_blueiris() is True
+        assert cam.bi_dups == 0
+
+
+def test_capture_blueiris_circuit_breaker_opens_after_failures():
+    cam = _make_camera()
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        bi.get.side_effect = OSError("down")
+        for _ in range(camera_mod.BI_BREAKER_FAILURES):
+            assert cam._capture_blueiris() is False
+        assert camera_mod._bi_skip_until > 0
+        bi.get.reset_mock()
+        assert cam._capture_blueiris() is False  # breaker open
+        bi.get.assert_not_called()
+
+
+def test_capture_blueiris_processing_failure_leaves_no_partial_state():
+    """A resize() exception must not leave self.image set, or the direct
+    path's `if self.image is None` failure counting is disabled."""
+    cam = _make_camera()
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        bi.get.return_value = _response(_jpeg_bytes())
+        with mock.patch.object(cam, "resize", side_effect=cv2.error("bad frame")):
+            assert cam._capture_blueiris() is False
+    assert cam.image is None
+    assert cam.resized is None
 
 
 def test_capture_blueiris_undecodable_signals_fallback():

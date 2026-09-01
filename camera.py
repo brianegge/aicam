@@ -16,6 +16,19 @@ from utils import cleanup
 
 logger = logging.getLogger(__name__)
 
+# One Blue Iris host serves frames for every camera, and captures run
+# concurrently from a thread pool, so share a session with a pool sized for it.
+_bi_session = None
+
+
+def _blueiris_session():
+    global _bi_session
+    if _bi_session is None:
+        _bi_session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=20)
+        _bi_session.mount("http://", adapter)
+    return _bi_session
+
 
 class Camera:
     def __init__(self, config, excludes, mqtt_client, blueiris_url=None):
@@ -47,7 +60,10 @@ class Camera:
         self.mqtt_client = mqtt_client
         if blueiris_url:
             bi_name = config.get("blueiris-name", self._default_blueiris_name())
-            self.blueiris_uri = f"{blueiris_url}/image/{bi_name}?q=100"
+            # w/h pin the output size: /image otherwise follows whatever
+            # streaming profile is active, which can dip below the 608x608
+            # model input. Blue Iris fits within the box preserving aspect.
+            self.blueiris_uri = f"{blueiris_url}/image/{bi_name}?q=85&w=1920&h=1080"
         else:
             self.blueiris_uri = None
         road_line_raw = config.get("road_line", None)
@@ -151,6 +167,13 @@ class Camera:
             if self.image is not None:
                 self.resize()
         else:
+            # Blue Iris first: it already decodes every camera's stream for
+            # recording and serves the latest frame in well under a second.
+            # snapshot.cgi makes the camera encode a full-res JPEG on demand —
+            # seconds of camera CPU per poll, and the busy Dahua cams drop
+            # pings or time out outright under that load.
+            if self.blueiris_uri and self._capture_blueiris():
+                return self
             try:
                 with self._get_session().get(
                     self.config["uri"], timeout=20, stream=True
@@ -169,8 +192,6 @@ class Camera:
             except Exception:
                 self.error = sys.exc_info()[0]
                 logger.exception(f"Error with {self.name}:{self.error}")
-                if self.blueiris_uri:
-                    self._capture_blueiris()
                 if self.image is None:
                     self.image_hash = 0
                     self.source = None
@@ -182,22 +203,40 @@ class Camera:
         return self
 
     def _capture_blueiris(self):
-        """Fallback: grab a snapshot from Blue Iris."""
+        """Grab the latest decoded frame from Blue Iris.
+
+        Returns True when a frame was handled (including a duplicate, which
+        marks a frozen stream); False means the caller should fall back to a
+        direct camera snapshot.
+        """
         try:
-            resp = requests.get(self.blueiris_uri, timeout=10)
+            resp = _blueiris_session().get(self.blueiris_uri, timeout=10)
             resp.raise_for_status()
             bytes = np.asarray(bytearray(resp.content), dtype="uint8")
             if len(bytes) == 0:
-                return
-            self.image = cv2.imdecode(bytes, cv2.IMREAD_UNCHANGED)
-            self.image_hash = hashlib.md5(self.image.tobytes()).hexdigest()
+                logger.warning(f"Blue Iris returned empty image for {self.name}")
+                return False
+            image = cv2.imdecode(bytes, cv2.IMREAD_UNCHANGED)
+            if image is None:
+                logger.warning(f"Blue Iris returned undecodable image for {self.name}")
+                return False
+            image_hash = hashlib.md5(image.tobytes()).hexdigest()
+            if image_hash == self.image_hash:
+                # The camera streams continuously, so an identical frame means
+                # the stream into Blue Iris is frozen; let the caller try the
+                # camera directly.
+                logger.warning(f"Blue Iris frame for {self.name} is unchanged (frozen stream?)")
+                return False
+            self.image = image
+            self.image_hash = image_hash
             self.source = self.blueiris_uri
             self.resize()
-            self.error = "blueiris"
+            self.error = None
             self.fails = 0
-            logger.info(f"Fallback to Blue Iris for {self.name}")
+            return True
         except Exception:
-            logger.debug(f"Blue Iris fallback also failed for {self.name}")
+            logger.warning(f"Blue Iris capture failed for {self.name}, falling back to camera: {sys.exc_info()[1]}")
+            return False
 
     def _get_session(self):
         if self.session is None:

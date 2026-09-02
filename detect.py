@@ -11,7 +11,9 @@ import cv2
 import humanize
 from PIL import Image
 
-from notify import ALPR_STATE_KEYS, notify
+import alpr
+from alpr import ALPR_STATE_KEYS, wants_alpr
+from notify import notify
 from utils import bb_intersection_over_union, draw_bbox, draw_road
 
 logger = logging.getLogger(__name__)
@@ -279,7 +281,26 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         cam.publish(f"{cam.ha_name}/show", show_count > 0, retain=False)
         cam.last_show_count = show_count
 
-    if len(new_objects):
+    # Read plates on their own cadence, before deciding whether to notify. A
+    # vehicle that parks holds a stable track and produces no new objects, so
+    # gating this on movement meant a parked vehicle -- the case where the
+    # plate is most readable -- was never looked at again.
+    new_plates = []
+    vehicles_due = [p for p in valid_predictions if wants_alpr(p)]
+    if vehicles_due:
+        try:
+            # Clean pixels, not im_pil: no reason to hand the reader an image
+            # with bounding boxes drawn over it.
+            if isinstance(image, Image.Image):
+                alpr_image = image
+            else:
+                alpr_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+            new_plates = alpr.read_plates(cam, alpr_image, vehicles_due, config)
+        except Exception:
+            logger.exception("ALPR pass failed for %s", cam.name)
+
+    # Notify on movement, and also when a plate is read for the first time.
+    if len(new_objects) or new_plates:
         if cam.name in ["driveway", "garage"]:
             message = "%s in %s" % (",".join(valid_objects), cam.name)
         elif cam.name == "shed":

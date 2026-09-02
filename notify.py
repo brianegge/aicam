@@ -2,7 +2,6 @@ import json
 import logging
 import os
 import uuid
-from datetime import date, datetime
 from io import BytesIO
 from pprint import pformat
 from urllib.parse import urlencode
@@ -11,43 +10,8 @@ import cv2
 import requests
 from PIL import Image
 
-import codeproject
 
 logger = logging.getLogger(__name__)
-
-# A vehicle is rarely readable on the frames where it is first seen — it is
-# still moving, angled, or half out of frame. A box truck that arrived and
-# parked with its plate square-on to three cameras went unread for ten minutes
-# because ALPR only ever ran on the first 3 frames of the track. Keep looking on
-# a decaying cadence until the plate is read, or the vehicle has sat there long
-# enough that it never will be.
-ALPR_INITIAL_FRAMES = 3
-ALPR_RETRY_EVERY = 10
-ALPR_MAX_AGE = 120
-# Copied back onto the tracked prediction by detect.py, so a successful read
-# stops the retries for that vehicle.
-ALPR_STATE_KEYS = ("plate_read",)
-
-
-def wants_alpr(p):
-    """Should ALPR run for this prediction on this frame?
-
-    Bounded on purpose: at a 3s interval this is at most ~15 calls spread over
-    the first six minutes a vehicle is present, not one per frame forever.
-    """
-    if p["tagName"] != "vehicle":
-        return False
-    if "ignore" in p or "departed" in p:
-        return False
-    if p.get("plate_read"):
-        return False
-    age = p["age"]
-    if age < ALPR_INITIAL_FRAMES:
-        return True
-    if age > ALPR_MAX_AGE:
-        return False
-    return age % ALPR_RETRY_EVERY == 0
-
 
 license_plates = {}
 # Maps variant strings (exact + edits1) of known plates to their original plate key.
@@ -112,9 +76,6 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
         filter(lambda p: p["tagName"] == "vehicle" and "ignore" not in p, predictions)
     )
     has_vehicles = len(vehicles) > 0
-    has_visible_vehicles = len(
-        list(filter(wants_alpr, predictions))
-    )
     people = list(
         filter(
             lambda p: p["tagName"] == "person" and "ignore" not in p,
@@ -302,106 +263,53 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
     for p in predictions:
         cropped_image.save(os.path.join(static_dir, f"{p['tagName']}.jpg"))
 
-    # Run ALPR for vehicles regardless of notification priority
-    if has_visible_vehicles and len(vehicles) > 0:
-        logging.info(pformat(vehicles))
-        left = max(0, min(p["boundingBox"]["left"] - 0.05 for p in vehicles) * width)
-        right = min(
-            width,
-            max(
-                p["boundingBox"]["left"] + p["boundingBox"]["width"] + 0.05
-                for p in vehicles
-            )
-            * width,
-        )
-        top = max(0, min(p["boundingBox"]["top"] - 0.05 for p in vehicles) * height)
-        bottom = min(
-            height,
-            max(
-                p["boundingBox"]["top"] + p["boundingBox"]["height"] + 0.05
-                for p in vehicles
-            )
-            * height,
-        )
-        crop_rectangle = (left, top, right, bottom)
-        vehicle_image = image.crop(crop_rectangle)
-        save_dir = os.path.join(
-            config["detector"]["save-path"], date.today().strftime("%Y%m%d")
-        )
-        save_vehicle = os.path.join(
-            save_dir,
-            datetime.now().strftime("%H%M%S")
-            + "-"
-            + vehicles[0]["camName"].replace(" ", "_")
-            + "-"
-            + "codeproject.jpg",
-        )
-        vehicle_image.save(save_vehicle)
-        vehicle_bytes = BytesIO()
-        vehicle_image.save(vehicle_bytes, "jpeg")
-        vehicle_bytes.seek(0)
-        try:
-            save_json = os.path.join(
-                save_dir,
-                datetime.now().strftime("%H%M%S")
-                + "-"
-                + vehicles[0]["camName"].replace(" ", "_")
-                + "-"
-                + "codeproject.txt",
-            )
-            codeproject_url = config["codeproject"]["url"] if "codeproject" in config else None
-            enrichments = codeproject.enrich(vehicle_bytes.read(), save_json, url=codeproject_url)
-            if enrichments["plates"]:
-                # Read it once; stop retrying this vehicle. detect.py copies
-                # this onto the tracked prediction so it survives the frame.
-                for v in vehicles:
-                    v["plate_read"] = True
-            vehicle_message = ""
-            if enrichments["count"] == 0:
-                # Don't announce if ALPR can't find a vehicle
-                notify_vehicle = False
-            plates_db = _load_license_plates()
-            house_cleaner_found = False
-            for plate in enrichments["plates"]:
-                matched_key = _match_plate(plate) or _match_plate(plate.replace(" ", ""))
-                if matched_key:
-                    r = plates_db[matched_key]
-                    if len(vehicle_message) > 0:
-                        vehicle_message += " and "
-                    if "owner" in r:
-                        vehicle_message += r["owner"] + "'s "
-                        if r["owner"].lower() == "house cleaner":
-                            house_cleaner_found = True
-                    if "color" in r:
-                        vehicle_message += r["color"] + " "
-                    if "make" in r:
-                        vehicle_message += r["make"] + " "
-                        if "model" in r:
-                            vehicle_message += r["model"]
+    # ALPR itself runs in alpr.py on its own cadence, because a parked vehicle
+    # stops producing new objects and would never be looked at again if reading
+    # the plate were tied to building a notification. Here we only consume what
+    # it recorded on the prediction.
+    plates = [v["plate"] for v in vehicles if v.get("plate")]
+    if not plates and any(v.get("alpr_count") == 0 for v in vehicles):
+        # Don't announce if ALPR can't find a vehicle
+        notify_vehicle = False
+    if plates:
+        vehicle_message = ""
+        plates_db = _load_license_plates()
+        house_cleaner_found = False
+        for plate in plates:
+            matched_key = _match_plate(plate) or _match_plate(plate.replace(" ", ""))
+            if matched_key:
+                r = plates_db[matched_key]
+                if len(vehicle_message) > 0:
+                    vehicle_message += " and "
+                if "owner" in r:
+                    vehicle_message += r["owner"] + "'s "
+                    if r["owner"].lower() == "house cleaner":
+                        house_cleaner_found = True
+                if "color" in r:
+                    vehicle_message += r["color"] + " "
+                if "make" in r:
+                    vehicle_message += r["make"] + " "
+                    if "model" in r:
+                        vehicle_message += r["model"]
+                else:
+                    vehicle_message += "vehicle"
+                if r.get("announce", True) is False:
+                    logging.info(
+                        "Ignoring {}'s vehicle with plate {}".format(r["owner"], plate)
+                    )
+                    vehicle_message = None
+            if vehicle_message is not None:
+                if vehicle_message == "":
+                    vehicle_message = "Vehicle"
+                if notify_vehicle:
+                    if cam.name == "shed":
+                        ha.echo_speaks(f"{vehicle_message} in front of garage")
                     else:
-                        vehicle_message += "vehicle"
-                    if r.get("announce", True) is False:
-                        logging.info(
-                            "Ignoring {}'s vehicle with plate {}".format(
-                                r["owner"], plate
-                            )
-                        )
-                        vehicle_message = None
-                if vehicle_message is not None:
-                    if vehicle_message == "":
-                        vehicle_message = "Vehicle"
-                    if notify_vehicle:
-                        if cam.name == "shed":
-                            ha.echo_speaks(f"{vehicle_message} in front of garage")
-                        else:
-                            ha.echo_speaks(f"{vehicle_message} in driveway")
-                    # don't announce plate
-                    message += "\n" + vehicle_message + " " + plate
-            if house_cleaner_found:
-                ha.house_cleaners_arrived()
-
-        except Exception:
-            logging.exception("Failed to enrich via codeproject")
+                        ha.echo_speaks(f"{vehicle_message} in driveway")
+                # don't announce plate
+                message += "\n" + vehicle_message + " " + plate
+        if house_cleaner_found:
+            ha.house_cleaners_arrived()
 
     #    if has_package and (priority >= 0 or has_dog):
     #        prob = max(map(lambda x: x["probability"], packages))

@@ -1,2 +1,5 @@
 /config.txt
 !/config-test.txt
+__pycache__/
+*.pyc
+.pytest_cache/

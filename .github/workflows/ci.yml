@@ -31,4 +31,4 @@ jobs:
       - name: Install test dependencies
         run: pip install pytest opencv-python-headless numpy requests pillow
       - name: Run tests
-        run: pytest camera_test.py utils_test.py logsetup_test.py -v
+        run: pytest camera_test.py utils_test.py logsetup_test.py yolov4_detection_test.py codeproject_test.py notify_alpr_test.py -v

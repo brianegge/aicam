@@ -11,6 +11,26 @@ logger = logging.getLogger(__name__)
 # Default CodeProject AI Server endpoint (can be overridden via config)
 DEFAULT_CODEPROJECT_URL = "http://localhost:32168/v1/image/alpr"
 
+# ALPR happily reads any plate-shaped block of high-contrast lettering. A box
+# truck's grille badge scored 0.957 as "ITSUBISHIFUS", and a bumper reflection
+# read as "REC" — confidence alone does not separate those from a real plate,
+# but shape does. US plates are 2-8 characters and effectively always contain
+# a digit.
+MIN_PLATE_LEN = 2
+MAX_PLATE_LEN = 8
+
+
+def is_plausible_plate(plate):
+    """True if the string could be a license plate rather than badge lettering."""
+    stripped = plate.replace(" ", "").replace("-", "").replace(".", "")
+    if not (MIN_PLATE_LEN <= len(stripped) <= MAX_PLATE_LEN):
+        return False
+    if not stripped.isalnum():
+        return False
+    if not any(c.isdigit() for c in stripped):
+        return False
+    return True
+
 
 def enrich(image_bytes, save_json=None, url=None):
     """
@@ -45,8 +65,16 @@ def enrich(image_bytes, save_json=None, url=None):
     if result.get("success") and "predictions" in result:
         for prediction in result["predictions"]:
             plate = prediction.get("plate", "")
-            if plate:
-                plates.append(plate)
+            if not plate:
+                continue
+            if not is_plausible_plate(plate):
+                logger.info(
+                    "Discarding implausible plate %r (%.2f)",
+                    plate,
+                    prediction.get("confidence", 0.0),
+                )
+                continue
+            plates.append(plate)
 
     message = ""
     if plates:

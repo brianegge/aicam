@@ -11,7 +11,7 @@ import cv2
 import humanize
 from PIL import Image
 
-from notify import notify
+from notify import ALPR_STATE_KEYS, notify
 from utils import bb_intersection_over_union, draw_bbox, draw_road
 
 logger = logging.getLogger(__name__)
@@ -167,6 +167,9 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
 
     colors = config["colors"]
     new_predictions = []
+    # (current frame prediction, tracked prediction) for everything matched to
+    # an existing track, so state notify() sets can be written back afterwards.
+    tracked_pairs = []
     for p in valid_predictions:
         this_box = p["boundingBox"]
         this_name = p["tagName"]
@@ -180,9 +183,12 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
                 prev["boundingBox"] = this_box  # move the box to current
                 prev["last_time"] = datetime.now()
                 prev["age"] = prev["age"] + 1
-                for t in ["age", "ignore", "priority", "priority_type"]:
+                for t in ["age", "ignore", "priority", "priority_type"] + list(
+                    ALPR_STATE_KEYS
+                ):
                     if t in prev:
                         p[t] = prev[t]
+                tracked_pairs.append((p, prev))
         if "iou" not in p:
             p["start_time"] = datetime.now()
             p["last_time"] = datetime.now()
@@ -295,6 +301,13 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         priority = cam.prior_priority
     else:
         priority = -4
+
+    # Notify records a successful plate read on the current frame's prediction;
+    # persist it onto the track so the retries stop.
+    for current, tracked in tracked_pairs:
+        for key in ALPR_STATE_KEYS:
+            if key in current:
+                tracked[key] = current[key]
 
     # Notify may also mark objects as ignore
     valid_predictions = list(filter(lambda p: not ("ignore" in p), predictions))

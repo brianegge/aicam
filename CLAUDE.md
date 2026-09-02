@@ -19,6 +19,67 @@ execution provider. CoreML computes in fp16, so confidences differ from
 TensorRT in the third decimal — watch class thresholds that sit on a boundary
 (`dog=0.95`).
 
+## Models
+
+Each model section picks its decoder with `backend=`, so they do not all have
+to be the same architecture:
+
+| model | file | backend |
+|-------|------|---------|
+| color | `ipcams_color_yolov4.onnx` | `yolov4` (default) |
+| grey | `ipcams_grey_yolov4.onnx` | `yolov4` (default) |
+| vehicle | `packages_vehicles_yolo11s.onnx` | `ultralytics` |
+
+- `yolov4` — the darknet-lineage models, output `boxes[1,N,1,4]` +
+  `confs[1,N,nc]`, normalised corners.
+- `ultralytics` — YOLO11/v8, one output `[1, 4+nc, N]`, boxes as `cx,cy,w,h` in
+  input pixels, no objectness.
+
+`vehicles_yolov4.onnx` is still on the host; rolling back is `onnx=` plus
+removing `backend=` in `[vehicle-model]`, then a restart.
+
+## Retraining a model on claw-mini
+
+Darknet has **no GPU path on Apple silicon**, so the original YOLOv4 pipeline
+cannot be reproduced here — CPU training of the old cfg's 6000 batches would
+take days. Retrain with Ultralytics instead and set `backend=ultralytics`.
+
+```bash
+ssh openclaw.home
+# one-time
+/opt/homebrew/bin/uv venv -p 3.12 ~/train/.venv
+/opt/homebrew/bin/uv pip install -p ~/train/.venv/bin/python ultralytics roboflow onnx onnxslim
+
+# fetch the dataset (YOLOv8 format; YOLO11 is the same layout)
+export RFKEY=$(python3 -c "import configparser;c=configparser.ConfigParser();c.read('/Users/claw/aicam/config.txt');print(c['roboflow']['api-key'])")
+~/train/.venv/bin/python -c "
+from roboflow import Roboflow
+import os
+Roboflow(api_key=os.environ['RFKEY']).workspace('egge-public').project('packages-vehicles2') \
+    .version(11).download('yolov8', location='/Users/claw/train/packages-vehicles2-v11')"
+
+# train (~70 s/epoch for yolo11s, so ~2 h for 100 epochs)
+nohup ~/train/.venv/bin/yolo detect train \
+  data=/Users/claw/train/packages-vehicles2-v11/data.yaml \
+  model=yolo11s.pt epochs=100 imgsz=608 batch=16 device=mps workers=4 \
+  project=/Users/claw/train/runs name=pv11-yolo11s > ~/train/train.log 2>&1 &
+
+# export, then install
+~/train/.venv/bin/python -c "
+from ultralytics import YOLO
+YOLO('/Users/claw/train/runs/pv11-yolo11s/weights/best.pt').export(format='onnx', imgsz=608, opset=12)"
+cp /Users/claw/train/runs/pv11-yolo11s/weights/best.onnx ~/aicam/<name>.onnx
+```
+
+**Train at `imgsz=608`, not the 640 default.** `camera.py`'s `resize()` hands
+every model a 608x608 array, so matching it avoids touching the capture path.
+
+`/Users/claw/train/compare.py` scores an old and a new model against the same
+held-out split, using the same preprocessing aicam uses, and reports per-class
+precision/recall/F1 at the thresholds actually configured in `[thresholds]`.
+Run it before swapping a model in — the validation mAP the trainer prints is
+not measured at your operational thresholds.
+
 ### Network constraints
 
 claw-mini sits on the isolated OpenClaw subnet (192.168.251.0/24, a dedicated

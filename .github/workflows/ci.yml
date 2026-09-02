@@ -17,9 +17,9 @@ jobs:
       - name: Compile rootfs-watchdog (C)
         run: gcc -Wall -Werror -O2 -pthread -c watchdog/rootfs-watchdog.c -o /tmp/rw.o
       - name: Check Python syntax
-        run: python -m py_compile main.py detect.py camera.py notify.py alpr.py codeproject.py detection_base.py yolov4_detection.py ultralytics_detection.py homeassistant.py roboflow_upload.py utils.py logsetup.py
+        run: python -m py_compile main.py detect.py camera.py notify.py alpr.py codeproject.py detection_base.py yolov4_detection.py ultralytics_detection.py compare_models.py homeassistant.py roboflow_upload.py utils.py logsetup.py
       - name: Check syntax against Python 3.6 (deployment target on egge-nano)
-        run: docker run --rm -v "$PWD":/app -w /app python:3.6-slim python -m py_compile main.py detect.py camera.py notify.py alpr.py codeproject.py detection_base.py yolov4_detection.py ultralytics_detection.py homeassistant.py roboflow_upload.py utils.py logsetup.py
+        run: docker run --rm -v "$PWD":/app -w /app python:3.6-slim python -m py_compile main.py detect.py camera.py notify.py alpr.py codeproject.py detection_base.py yolov4_detection.py ultralytics_detection.py compare_models.py homeassistant.py roboflow_upload.py utils.py logsetup.py
 
   test:
     runs-on: ubuntu-latest

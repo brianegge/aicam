@@ -282,12 +282,32 @@ class GracefulKiller:
 
 
 def load_model(model_config, labels, use_trt):
-    """Build a detector on the requested backend.
+    """Build a detector on the backend named by the model's config section.
 
-    Both backends are imported lazily: object_detection_rtv4 initializes CUDA at
+    `backend` selects how the model's output is decoded — "yolov4" (default,
+    the darknet-lineage models) or "ultralytics" (anything retrained on
+    claw-mini, which cannot produce a darknet graph). Models can differ, so the
+    ipcams models stay on YOLOv4 while a retrained vehicle model does not have
+    to.
+
+    Everything is imported lazily: object_detection_rtv4 initializes CUDA at
     import time, so it can only be touched on the Jetson, and onnxruntime is not
     installed there.
     """
+    backend = model_config.get("backend", "yolov4").strip().lower()
+
+    if backend == "ultralytics":
+        if use_trt:
+            raise ValueError(
+                "backend=ultralytics has no TensorRT path; run without --trt"
+            )
+        from ultralytics_detection import ONNXRuntimeUltralyticsObjectDetection
+
+        return ONNXRuntimeUltralyticsObjectDetection(model_config, labels)
+
+    if backend != "yolov4":
+        raise ValueError("Unknown backend %r for model %s" % (backend, labels))
+
     if use_trt:
         from object_detection_rtv4 import ONNXTensorRTv4ObjectDetection
 

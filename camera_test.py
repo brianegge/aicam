@@ -1,4 +1,5 @@
 """Tests for Camera capture paths (Blue Iris primary, direct fallback)."""
+
 import configparser
 from unittest import mock
 
@@ -30,7 +31,9 @@ def _jpeg_bytes(seed=0):
     return buf.tobytes()
 
 
-def _make_camera(blueiris_url="http://blueiris-3.home:81", **extra):
+def _make_camera(
+    blueiris_url="http://blueiris-3.home:81", blueiris_only=False, **extra
+):
     config = configparser.ConfigParser()
     config["cam0"] = {
         "uri": "http://test-cam.home/cgi-bin/snapshot.cgi",
@@ -40,7 +43,13 @@ def _make_camera(blueiris_url="http://blueiris-3.home:81", **extra):
     }
     for k, v in extra.items():
         config["cam0"][k] = v
-    return Camera(config["cam0"], {}, mqtt_client=None, blueiris_url=blueiris_url)
+    return Camera(
+        config["cam0"],
+        {},
+        mqtt_client=None,
+        blueiris_url=blueiris_url,
+        blueiris_only=blueiris_only,
+    )
 
 
 def _response(content, status=200):
@@ -103,6 +112,31 @@ def test_capture_falls_back_to_direct_when_blueiris_fails():
     assert cam.image is not None
     assert cam.error is None
     assert cam.source == cam.config["uri"]
+
+
+def test_blueiris_only_skips_direct_fallback():
+    """With no route to the camera, the direct request can only time out."""
+    cam = _make_camera(blueiris_only=True)
+    direct_session = mock.Mock()
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        bi.get.side_effect = OSError("connection refused")
+        with mock.patch.object(cam, "_get_session", return_value=direct_session):
+            cam.capture()
+    direct_session.get.assert_not_called()
+    assert cam.image is None
+    assert cam.error == "no-bi"
+    # Still backs off, so a camera BI cannot serve is not retried every cycle.
+    assert cam.skip == 1
+    assert cam.fails == 1
+
+
+def test_blueiris_only_still_uses_a_good_blueiris_frame():
+    cam = _make_camera(blueiris_only=True)
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        bi.get.return_value = _response(_jpeg_bytes(seed=3))
+        cam.capture()
+    assert cam.image is not None
+    assert cam.error is None
 
 
 def test_capture_blueiris_frozen_stream_falls_back_after_threshold():

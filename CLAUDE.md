@@ -38,9 +38,22 @@ Consequences baked into the config:
   latency the FTP push used to give.
 
 ## Services
-- `com.brianegge.aicam` (launchd, claw-mini) — main camera detection loop
-- `aicam-review.service` (systemd, egge-nano) — Roboflow review upload server
-  (`roboflow_upload.py --port 5050`), still on the nano
+- `com.brianegge.aicam` (launchd) — main camera detection loop
+- `com.brianegge.aicam-review` (launchd) — Roboflow review upload server
+  (`roboflow_upload.py --port 5050`)
+- `com.brianegge.aicam-cleanup` (launchd) — hourly capture trim
+
+The review server **must run on the same host as aicam**: the "Flag for Review"
+link in a Pushover alert resolves to a file under `save-path/review/`, which
+the server reads off local disk. Home Assistant's
+`rest_command.aicam_roboflow_upload` has to point at this host — it still
+pointed at `egge-nano.home:5050` after the move, so every flag returned
+`404 file not found`.
+
+```bash
+curl -s http://openclaw.home:5050/health
+ssh openclaw.home "tail -n 50 ~/aicam-data/aicam-review.log"
+```
 
 ## Logs
 ```bash

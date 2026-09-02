@@ -24,6 +24,7 @@ import sdnotify
 from camera import Camera
 from detect import detect
 from homeassistant import HomeAssistant
+from logsetup import setup_syslog
 from object_detection_rtv4 import ONNXTensorRTv4ObjectDetection
 from utils import cleanup
 
@@ -284,6 +285,7 @@ class GracefulKiller:
 async def main(options: argparse.Namespace) -> None:
     config: configparser.ConfigParser = configparser.ConfigParser()
     config.read(options.config_file)
+    setup_syslog(config)
     ha: HomeAssistant = HomeAssistant(config["homeassistant"])
     detector_config: Dict[str, str] = config["detector"]
     color_model_config: Dict[str, str] = config["color-model"]

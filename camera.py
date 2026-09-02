@@ -212,7 +212,11 @@ class Camera:
                     self.image_hash = 0
                     self.source = None
                     self.resized = None
-                    self.skip = 2 ** self.fails
+                    # Cap the backoff: uncapped, a camera that was down for
+                    # hours earned ~20-minute capture blackouts (mailbox hit
+                    # skip=700 on 2026-09-01) and kept coasting long after it
+                    # recovered. 64 cycles is ~1-2 minutes at scan cadence.
+                    self.skip = 2 ** min(self.fails, 6)
                     self.fails += 1
                     if self.skip > 3:
                         self.reboot()

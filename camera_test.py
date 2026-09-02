@@ -181,3 +181,16 @@ def test_capture_blueiris_empty_signals_fallback():
     with mock.patch.object(camera_mod, "_bi_session") as bi:
         bi.get.return_value = _response(b"")
         assert cam._capture_blueiris() is False
+
+
+def test_capture_backoff_is_capped():
+    """A long-dead camera must not earn unbounded skip blackouts."""
+    cam = _make_camera(blueiris_url=None)
+    cam.fails = 50
+    direct_session = mock.Mock()
+    direct_session.get.side_effect = OSError("still down")
+    with mock.patch.object(cam, "_get_session", return_value=direct_session):
+        with mock.patch.object(cam, "reboot"):
+            cam.capture()
+    assert cam.skip == 64
+    assert cam.fails == 51

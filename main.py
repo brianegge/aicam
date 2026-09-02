@@ -25,7 +25,6 @@ from camera import Camera
 from detect import detect
 from homeassistant import HomeAssistant
 from logsetup import setup_syslog
-from object_detection_rtv4 import ONNXTensorRTv4ObjectDetection
 from utils import cleanup
 
 log: logging.Logger = logging.getLogger("aicam")
@@ -282,6 +281,23 @@ class GracefulKiller:
         kill_now = True
 
 
+def load_model(model_config, labels, use_trt):
+    """Build a detector on the requested backend.
+
+    Both backends are imported lazily: object_detection_rtv4 initializes CUDA at
+    import time, so it can only be touched on the Jetson, and onnxruntime is not
+    installed there.
+    """
+    if use_trt:
+        from object_detection_rtv4 import ONNXTensorRTv4ObjectDetection
+
+        return ONNXTensorRTv4ObjectDetection(model_config, labels)
+
+    from yolov4_detection import ONNXRuntimeYolov4ObjectDetection
+
+    return ONNXRuntimeYolov4ObjectDetection(model_config, labels)
+
+
 async def main(options: argparse.Namespace) -> None:
     config: configparser.ConfigParser = configparser.ConfigParser()
     config.read(options.config_file)
@@ -328,13 +344,11 @@ async def main(options: argparse.Namespace) -> None:
 
     sd = sdnotify.SystemdNotifier()
     sd.notify("STATUS=Loading color model")
-    color_model = ONNXTensorRTv4ObjectDetection(color_model_config, labels)
+    color_model = load_model(color_model_config, labels, options.trt)
     sd.notify("STATUS=Loading grey model")
-    grey_model = ONNXTensorRTv4ObjectDetection(grey_model_config, labels)
+    grey_model = load_model(grey_model_config, labels, options.trt)
     sd.notify("STATUS=Loading vehicle/packages model")
-    vehicle_model = ONNXTensorRTv4ObjectDetection(
-        config["vehicle-model"], vehicle_labels
-    )
+    vehicle_model = load_model(config["vehicle-model"], vehicle_labels, options.trt)
     sd.notify("STATUS=Loaded models")
 
     blueiris_url = config.get("blueiris", "url", fallback=None)

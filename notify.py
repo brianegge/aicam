@@ -15,6 +15,40 @@ import codeproject
 
 logger = logging.getLogger(__name__)
 
+# A vehicle is rarely readable on the frames where it is first seen — it is
+# still moving, angled, or half out of frame. A box truck that arrived and
+# parked with its plate square-on to three cameras went unread for ten minutes
+# because ALPR only ever ran on the first 3 frames of the track. Keep looking on
+# a decaying cadence until the plate is read, or the vehicle has sat there long
+# enough that it never will be.
+ALPR_INITIAL_FRAMES = 3
+ALPR_RETRY_EVERY = 10
+ALPR_MAX_AGE = 120
+# Copied back onto the tracked prediction by detect.py, so a successful read
+# stops the retries for that vehicle.
+ALPR_STATE_KEYS = ("plate_read",)
+
+
+def wants_alpr(p):
+    """Should ALPR run for this prediction on this frame?
+
+    Bounded on purpose: at a 3s interval this is at most ~15 calls spread over
+    the first six minutes a vehicle is present, not one per frame forever.
+    """
+    if p["tagName"] != "vehicle":
+        return False
+    if "ignore" in p or "departed" in p:
+        return False
+    if p.get("plate_read"):
+        return False
+    age = p["age"]
+    if age < ALPR_INITIAL_FRAMES:
+        return True
+    if age > ALPR_MAX_AGE:
+        return False
+    return age % ALPR_RETRY_EVERY == 0
+
+
 license_plates = {}
 # Maps variant strings (exact + edits1) of known plates to their original plate key.
 # At query time, checking edits1(query) against this dict covers edit distance <= 2.
@@ -79,15 +113,7 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
     )
     has_vehicles = len(vehicles) > 0
     has_visible_vehicles = len(
-        list(
-            filter(
-                lambda p: p["tagName"] == "vehicle"
-                and "ignore" not in p
-                and "departed" not in p
-                and p["age"] < 3,  # Run ALPR on first 3 frames to catch plates that become visible
-                predictions,
-            )
-        )
+        list(filter(wants_alpr, predictions))
     )
     people = list(
         filter(
@@ -325,6 +351,11 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
             )
             codeproject_url = config["codeproject"]["url"] if "codeproject" in config else None
             enrichments = codeproject.enrich(vehicle_bytes.read(), save_json, url=codeproject_url)
+            if enrichments["plates"]:
+                # Read it once; stop retrying this vehicle. detect.py copies
+                # this onto the tracked prediction so it survives the frame.
+                for v in vehicles:
+                    v["plate_read"] = True
             vehicle_message = ""
             if enrichments["count"] == 0:
                 # Don't announce if ALPR can't find a vehicle

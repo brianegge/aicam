@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hourly capture trim, the launchd equivalent of the nano's cleanup.sh cron.
+
+  Install to ~/Library/LaunchAgents/com.brianegge.aicam-cleanup.plist and load with
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.brianegge.aicam-cleanup.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.brianegge.aicam-cleanup</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>/Users/claw/aicam/cleanup-capture.sh</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/claw/aicam-data/cleanup.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/claw/aicam-data/cleanup.log</string>
+
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>

@@ -39,7 +39,14 @@ BI_FROZEN_THRESHOLD = 3
 
 
 class Camera:
-    def __init__(self, config, excludes, mqtt_client, blueiris_url=None):
+    def __init__(
+        self, config, excludes, mqtt_client, blueiris_url=None, blueiris_only=False
+    ):
+        # Set on hosts with no route to the cameras themselves (the detector
+        # now runs in the OpenClaw subnet, which is firewalled off from the
+        # IPCAMS VLAN). Blue Iris is the only way in, so the direct snapshot
+        # fallback can only ever burn its connect timeout.
+        self.blueiris_only = blueiris_only
         self.name = config["name"]
         self.ha_name = self.name.replace(" ", "_")
         self.config = config
@@ -189,6 +196,17 @@ class Camera:
             # seconds of camera CPU per poll, and the busy Dahua cams drop
             # pings or time out outright under that load.
             if self.blueiris_uri and self._capture_blueiris():
+                return self
+            if self.blueiris_only:
+                # No route to the camera. Back off exactly as the direct path
+                # would, so a camera Blue Iris cannot serve stops being retried
+                # every cycle, but skip the request that can only time out.
+                self.error = "no-bi"
+                self.image_hash = 0
+                self.source = None
+                self.resized = None
+                self.skip = 2 ** min(self.fails, 6)
+                self.fails += 1
                 return self
             try:
                 with self._get_session().get(

@@ -198,9 +198,17 @@ class Camera:
             if self.blueiris_uri and self._capture_blueiris():
                 return self
             if self.blueiris_only:
-                # No route to the camera. Back off exactly as the direct path
-                # would, so a camera Blue Iris cannot serve stops being retried
-                # every cycle, but skip the request that can only time out.
+                if self.bi_dups >= BI_FROZEN_THRESHOLD:
+                    # Blue Iris limit-decodes idle cameras, so a repeated frame
+                    # is normal here and only means there is nothing new to
+                    # look at. With no direct path to escalate to, backing off
+                    # would sample a quiet camera less and less often for no
+                    # reason — just wait for the next frame.
+                    self.error = "dup"
+                    return self
+                # A real Blue Iris failure. Back off exactly as the direct path
+                # would, so a camera it cannot serve stops being retried every
+                # cycle, but skip the request that can only time out.
                 self.error = "no-bi"
                 self.image_hash = 0
                 self.source = None

@@ -130,6 +130,22 @@ def test_blueiris_only_skips_direct_fallback():
     assert cam.fails == 1
 
 
+def test_blueiris_only_does_not_back_off_on_repeated_frames():
+    """BI limit-decodes idle cameras, so repeats are normal, not a fault.
+
+    Backing off here would sample a quiet camera less and less often.
+    """
+    cam = _make_camera(blueiris_only=True)
+    content = _jpeg_bytes()
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        bi.get.return_value = _response(content)
+        for _ in range(camera_mod.BI_FROZEN_THRESHOLD + 3):
+            cam.capture()
+    assert cam.error == "dup"
+    assert cam.skip == 0
+    assert cam.fails == 0
+
+
 def test_blueiris_only_still_uses_a_good_blueiris_frame():
     cam = _make_camera(blueiris_only=True)
     with mock.patch.object(camera_mod, "_bi_session") as bi:

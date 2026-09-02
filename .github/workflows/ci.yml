@@ -15,9 +15,9 @@ jobs:
         with:
           python-version: "3.10"
       - name: Check Python syntax
-        run: python -m py_compile main.py detect.py camera.py notify.py homeassistant.py roboflow_upload.py utils.py
+        run: python -m py_compile main.py detect.py camera.py notify.py homeassistant.py roboflow_upload.py utils.py logsetup.py
       - name: Check syntax against Python 3.6 (deployment target on egge-nano)
-        run: docker run --rm -v "$PWD":/app -w /app python:3.6-slim python -m py_compile main.py detect.py camera.py notify.py homeassistant.py roboflow_upload.py utils.py
+        run: docker run --rm -v "$PWD":/app -w /app python:3.6-slim python -m py_compile main.py detect.py camera.py notify.py homeassistant.py roboflow_upload.py utils.py logsetup.py
 
   test:
     runs-on: ubuntu-latest
@@ -29,4 +29,4 @@ jobs:
       - name: Install test dependencies
         run: pip install pytest opencv-python-headless numpy requests pillow
       - name: Run tests
-        run: pytest camera_test.py utils_test.py -v
+        run: pytest camera_test.py utils_test.py logsetup_test.py -v

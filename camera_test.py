@@ -146,6 +146,28 @@ def test_blueiris_only_does_not_back_off_on_repeated_frames():
     assert cam.fails == 0
 
 
+def test_blueiris_only_repeats_do_not_warn(caplog):
+    """Idle cameras must not spam the syslog sink at WARNING."""
+    cam = _make_camera(blueiris_only=True)
+    with caplog.at_level("WARNING", logger="camera"):
+        with mock.patch.object(camera_mod, "_bi_session") as bi:
+            bi.get.return_value = _response(_jpeg_bytes())
+            for _ in range(camera_mod.BI_FROZEN_THRESHOLD + 5):
+                cam.capture()
+    assert caplog.records == []
+
+
+def test_blueiris_only_warns_once_on_a_genuinely_stuck_stream(caplog):
+    cam = _make_camera(blueiris_only=True)
+    with caplog.at_level("WARNING", logger="camera"):
+        with mock.patch.object(camera_mod, "_bi_session") as bi:
+            bi.get.return_value = _response(_jpeg_bytes())
+            for _ in range(camera_mod.BI_STUCK_THRESHOLD + 5):
+                cam.capture()
+    assert len(caplog.records) == 1
+    assert "stuck stream" in caplog.records[0].message
+
+
 def test_blueiris_only_still_uses_a_good_blueiris_frame():
     cam = _make_camera(blueiris_only=True)
     with mock.patch.object(camera_mod, "_bi_session") as bi:

@@ -36,6 +36,11 @@ BI_BREAKER_SECONDS = 60.0
 # The cameras stamp an OSD clock into every frame, so identical bytes should
 # mean frozen — the margin covers a truly static re-encode.
 BI_FROZEN_THRESHOLD = 3
+# In blueiris-only mode there is no direct snapshot to escalate to, and Blue
+# Iris legitimately repeats frames for cameras it is limit-decoding, so a short
+# run means "idle", not "broken". Only a run this long is worth warning about.
+# ~5 minutes at a 3s interval.
+BI_STUCK_THRESHOLD = 100
 
 
 class Camera:
@@ -288,7 +293,25 @@ class Camera:
         if content_hash == self.bi_hash:
             self.bi_dups += 1
             if self.bi_dups >= BI_FROZEN_THRESHOLD:
-                if self.bi_dups == BI_FROZEN_THRESHOLD:
+                if self.blueiris_only:
+                    # Blue Iris limit-decodes idle cameras, so a short run of
+                    # repeats is routine and there is nothing to escalate to.
+                    # Only a run long enough to mean a genuinely stuck stream
+                    # is worth a warning — at WARNING this fired ~1200x/day
+                    # into the syslog sink describing quiet cameras.
+                    if self.bi_dups == BI_STUCK_THRESHOLD:
+                        logger.warning(
+                            "Blue Iris frame for %s unchanged %d cycles — stuck stream?",
+                            self.name,
+                            self.bi_dups,
+                        )
+                    elif self.bi_dups == BI_FROZEN_THRESHOLD:
+                        logger.debug(
+                            "Blue Iris frame for %s unchanged %d cycles — waiting for a new frame",
+                            self.name,
+                            self.bi_dups,
+                        )
+                elif self.bi_dups == BI_FROZEN_THRESHOLD:
                     logger.warning(
                         f"Blue Iris frame for {self.name} unchanged {self.bi_dups} cycles (frozen stream?) — using direct snapshots"
                     )

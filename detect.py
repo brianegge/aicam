@@ -183,6 +183,14 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         cam.recent_objects[tag_name] = hold_now
     departed_objects = cam.objects - valid_objects
 
+    # Routine polling deliberately fetches a small frame -- the model only
+    # consumes 608x608. Pay for the full-resolution frame only when it is
+    # actually going to be cropped: for a notification image or for ALPR.
+    # cam.full_image() caches, so the later call is free.
+    vehicles_due = [p for p in valid_predictions if wants_alpr(p)]
+    if departed_objects or vehicles_due:
+        image = cam.full_image()
+
     yyyymmdd = date.today().strftime("%Y%m%d")
     save_dir = os.path.join(config["detector"]["save-path"], yyyymmdd)
     os.makedirs(save_dir, exist_ok=True)
@@ -258,6 +266,10 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
             if x["last_time"] < datetime.now() - timedelta(minutes=expiry_minutes):
                 expired.append(x)
         prev_class[:] = [x for x in prev_class if x not in expired]
+
+    if new_predictions:
+        # Something new to report, so the notification crop wants real pixels.
+        image = cam.full_image()
 
     if len(valid_predictions) >= 0:
         if isinstance(image, Image.Image):
@@ -340,7 +352,6 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     # gating this on movement meant a parked vehicle -- the case where the
     # plate is most readable -- was never looked at again.
     new_plates = []
-    vehicles_due = [p for p in valid_predictions if wants_alpr(p)]
     if vehicles_due:
         try:
             # Clean pixels, not im_pil: no reason to hand the reader an image

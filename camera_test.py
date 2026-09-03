@@ -67,7 +67,8 @@ def _response(content, status=200):
 
 def test_default_blueiris_name_strips_cam_suffix():
     cam = _make_camera()
-    assert cam.blueiris_uri == "http://blueiris-3.home:81/image/test?q=100&s=100"
+    assert cam.blueiris_uri.startswith("http://blueiris-3.home:81/image/test?")
+    assert cam.full_uri.startswith("http://blueiris-3.home:81/image/test?")
 
 
 def test_blueiris_name_override():
@@ -324,3 +325,52 @@ def test_backoff_is_monotonic():
 
     seq = [backoff_cycles(n) for n in range(1, 30)]
     assert seq == sorted(seq)
+
+
+# --- detection frame vs full-resolution frame -------------------------------
+
+
+def test_detect_and_full_uris_differ():
+    """Routine polling must not pull a 4MB frame; the model only needs 608x608."""
+    cam = _make_camera()
+    assert "w=1088" in cam.blueiris_uri
+    assert "s=100" in cam.full_uri
+    assert cam.blueiris_uri != cam.full_uri
+
+
+def test_detect_uri_is_at_least_the_model_input():
+    cam = _make_camera()
+    width = int(cam.blueiris_uri.split("w=")[1].split("&")[0])
+    assert width >= 608
+
+
+def test_full_image_is_fetched_lazily_and_cached():
+    cam = _make_camera()
+    cam.capture.__self__  # sanity: bound method exists
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        bi.get.return_value = _response(_jpeg_bytes(seed=5))
+        first = cam.full_image()
+        second = cam.full_image()
+    assert first is not None
+    assert second is first
+    assert bi.get.call_count == 1  # cached, not refetched
+
+
+def test_full_image_falls_back_to_the_detection_frame():
+    """A failed full fetch must not lose the event."""
+    cam = _make_camera()
+    cam.image = "detection-frame"
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        bi.get.side_effect = OSError("boom")
+        assert cam.full_image() == "detection-frame"
+
+
+def test_snapshot_url_camera_does_not_double_fetch():
+    """With one explicit source there is no cheaper detection variant."""
+    url = "http://ubuntu24.home:1984/api/frame.jpeg?src=shed"
+    cam = _make_camera(**{"snapshot-url": url})
+    cam.image = "detection-frame"
+    assert cam.full_uri == url
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        assert cam.full_image() == "detection-frame"
+        bi.get.assert_not_called()

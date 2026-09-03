@@ -80,6 +80,27 @@ def test_no_blueiris_url_disables_blueiris():
     assert cam.blueiris_uri is None
 
 
+def test_snapshot_url_overrides_blueiris():
+    """Frigate's go2rtc holds the main stream open, so its frames do not flip
+    between sharp and upscaled substream the way Blue Iris does."""
+    url = "http://ubuntu24.home:1984/api/frame.jpeg?src=garage_right"
+    cam = _make_camera(**{"snapshot-url": url})
+    assert cam.blueiris_uri == url
+
+
+def test_snapshot_url_works_without_a_blueiris_url():
+    url = "http://ubuntu24.home:1984/api/frame.jpeg?src=shed"
+    cam = _make_camera(blueiris_url=None, **{"snapshot-url": url})
+    assert cam.blueiris_uri == url
+
+
+def test_snapshot_url_wins_over_blueiris_name():
+    """An explicit source must not be silently replaced by name derivation."""
+    url = "http://ubuntu24.home:1984/api/frame.jpeg?src=shed"
+    cam = _make_camera(**{"snapshot-url": url, "blueiris-name": "front_entry"})
+    assert cam.blueiris_uri == url
+
+
 def test_capture_prefers_blueiris():
     cam = _make_camera()
     with mock.patch.object(camera_mod, "_bi_session") as session:

@@ -35,7 +35,9 @@ def add_centers(predictions):
 # is rebuilt every frame, so it only ever bridged a single missed frame -- not
 # two consecutive dips, and not a capture error.
 OBJECT_HOLD_SECONDS = 60
-HOLD_PROBABILITY = 0.4
+# Matched to the detector's conf floor, so a weak frame on an object we are
+# already holding actually reaches this check instead of being discarded twice.
+HOLD_PROBABILITY = 0.15
 
 
 def recently_seen(recent_objects, tag_name, now, hold_seconds=OBJECT_HOLD_SECONDS):

@@ -21,10 +21,17 @@ from detection_base import ConfiguredInputObjectDetection, nms_cpu, resolve_prov
 
 logger = logging.getLogger(__name__)
 
-# Matching the YOLOv4 path, which hardcodes these rather than using
-# prob_threshold, so swapping a model does not silently change how much gets
-# through to detect.py's own per-class thresholds.
-CONF_THRESHOLD = 0.4
+# Deliberately below detect.py's new-object thresholds. A stationary object's
+# score is not stable -- the car parked at peach tree read 0.93 in one frame and
+# 0.155 in another -- and at a 0.4 floor the weak frames emit nothing at all, so
+# detect.py's "recently seen" hold has no prediction to hold onto and the object
+# flaps. Emitting them lets the hold do its job.
+#
+# This does NOT loosen what gets reported: a new object still has to clear its
+# full threshold (0.70 by day, 0.90 while dark) in detect.py. Only a class
+# already confirmed on that camera within OBJECT_HOLD_SECONDS can be carried by
+# a detection this weak.
+CONF_THRESHOLD = 0.15
 NMS_THRESHOLD = 0.6
 
 

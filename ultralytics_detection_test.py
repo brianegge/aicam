@@ -10,7 +10,10 @@ import pytest
 
 pytest.importorskip("PIL")
 
-from ultralytics_detection import ONNXRuntimeUltralyticsObjectDetection
+from ultralytics_detection import (
+    CONF_THRESHOLD,
+    ONNXRuntimeUltralyticsObjectDetection,
+)
 
 LABELS = ["package", "vehicle"]
 SIZE = 608
@@ -25,7 +28,7 @@ class _Decoder(ONNXRuntimeUltralyticsObjectDetection):
         self.model_height = SIZE
         self.channels = 3
         self.max_detections = 20
-        self.conf_threshold = 0.4
+        self.conf_threshold = CONF_THRESHOLD
         self.nms_threshold = 0.6
 
 
@@ -57,7 +60,20 @@ def test_class_score_selects_the_label():
 
 
 def test_low_confidence_is_dropped():
-    assert _Decoder().postprocess(_raw([(304, 304, 100, 100, 0.0, 0.2)])) == []
+    assert _Decoder().postprocess(_raw([(304, 304, 100, 100, 0.0, 0.05)])) == []
+
+
+def test_floor_is_low_enough_to_surface_a_held_object():
+    """The parked car at peach tree read 0.155 in a weak frame. Below the old
+    0.4 floor nothing was emitted, so detect.py's hold had nothing to hold."""
+    preds = _Decoder().postprocess(_raw([(304, 304, 100, 100, 0.0, 0.155)]))
+    assert [p["tagName"] for p in preds] == ["vehicle"]
+
+
+def test_floor_stays_below_the_new_object_thresholds():
+    """The floor must not become the reporting threshold -- detect.py still
+    requires 0.70 by day and 0.90 while dark for a new object."""
+    assert CONF_THRESHOLD < 0.70
 
 
 def test_overlapping_boxes_of_one_class_are_suppressed():

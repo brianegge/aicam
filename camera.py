@@ -82,7 +82,16 @@ class Camera:
         self.bi_dups = 0
         self.mqtt = set(config.get("mqtt", "").split(","))
         self.mqtt_client = mqtt_client
-        if blueiris_url:
+        # A camera can name its own snapshot source, which takes precedence
+        # over Blue Iris. Used to pull from Frigate's bundled go2rtc, which
+        # holds the main stream open and so returns a consistently sharp frame:
+        # Blue Iris swings ~100x in sharpness between polls depending on
+        # whether it currently has the main stream decoded or only the
+        # substream, which it then upscales.
+        snapshot_url = config.get("snapshot-url", None)
+        if snapshot_url:
+            self.blueiris_uri = snapshot_url
+        elif blueiris_url:
             bi_name = config.get("blueiris-name", self._default_blueiris_name())
             # q=100&s=100: notify.py crops self.image at native resolution
             # for push notifications and plate recognition, so size here is

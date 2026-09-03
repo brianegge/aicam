@@ -56,6 +56,10 @@ class Camera:
         self.ha_name = self.name.replace(" ", "_")
         self.config = config
         self.objects = set()
+        # tagName -> when that class was last accepted on this camera. Backs the
+        # durable low-confidence hold in detect.py; self.objects only ever
+        # covered a single frame.
+        self.recent_objects = {}
         self.prev_predictions = {}
         self.is_file = False
         self.counts = {}

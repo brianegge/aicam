@@ -57,3 +57,42 @@ def test_observed_overnight_false_positives_are_all_suppressed():
     observed_max = 0.88
     dark = _section({"vehicle": "0.90"})
     assert observed_max < threshold_for("vehicle", _section({}), dark, DEFAULT)
+
+
+# --- durable low-confidence hold -------------------------------------------
+
+from datetime import datetime, timedelta  # noqa: E402
+
+from detect import OBJECT_HOLD_SECONDS, recently_seen  # noqa: E402
+
+NOW = datetime(2026, 9, 3, 13, 0, 0)
+
+
+def test_unseen_class_is_not_held():
+    assert not recently_seen({}, "vehicle", NOW)
+
+
+def test_just_seen_class_is_held():
+    assert recently_seen({"vehicle": NOW}, "vehicle", NOW)
+
+
+def test_hold_survives_a_run_of_missed_frames():
+    """The old cam.objects hold only bridged one frame; a stationary object
+    dipping for several consecutive frames broke it."""
+    seen = {"vehicle": NOW - timedelta(seconds=30)}
+    assert recently_seen(seen, "vehicle", NOW)
+
+
+def test_hold_expires():
+    seen = {"vehicle": NOW - timedelta(seconds=OBJECT_HOLD_SECONDS + 1)}
+    assert not recently_seen(seen, "vehicle", NOW)
+
+
+def test_hold_is_per_class():
+    seen = {"vehicle": NOW}
+    assert not recently_seen(seen, "person", NOW)
+
+
+def test_hold_window_is_configurable():
+    seen = {"vehicle": NOW - timedelta(seconds=10)}
+    assert not recently_seen(seen, "vehicle", NOW, hold_seconds=5)

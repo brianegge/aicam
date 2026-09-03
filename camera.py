@@ -36,6 +36,14 @@ BI_BREAKER_SECONDS = 60.0
 # The cameras stamp an OSD clock into every frame, so identical bytes should
 # mean frozen — the margin covers a truly static re-encode.
 BI_FROZEN_THRESHOLD = 3
+# Routine polling only feeds a 608x608 model input, so fetching a full 4MB
+# frame every cycle for every camera was pure waste -- at 15 cameras it put
+# ~20MB/s through Blue Iris and pushed its CPU to 51-87%. w=1088 keeps both
+# dimensions above the model input while costing ~10-13x less
+# (peach tree 3.86MB -> 302KB). Full resolution is fetched lazily, only when a
+# frame is actually going to be cropped for a notification or for ALPR.
+BI_DETECT_PARAMS = "q=85&w=1088"
+BI_FULL_PARAMS = "q=100&s=100"
 # Tolerate this many consecutive failures before backing off at all. Blue Iris
 # drops roughly one request in ten under normal load, and doubling from the
 # first failure turned that into 65% of camera samples being skipped -- 6 real
@@ -106,9 +114,11 @@ class Camera:
         # Blue Iris swings ~100x in sharpness between polls depending on
         # whether it currently has the main stream decoded or only the
         # substream, which it then upscales.
+        self._full_image = None
         snapshot_url = config.get("snapshot-url", None)
         if snapshot_url:
             self.blueiris_uri = snapshot_url
+            self.full_uri = config.get("full-snapshot-url", snapshot_url)
         elif blueiris_url:
             bi_name = config.get("blueiris-name", self._default_blueiris_name())
             # q=100&s=100: notify.py crops self.image at native resolution
@@ -118,9 +128,12 @@ class Camera:
             # decoded. Caveat: when BI is "limit decoding" a camera it only
             # has the substream (e.g. 856x480), and s=100 cannot upscale —
             # the frame is whatever BI is currently decoding.
-            self.blueiris_uri = f"{blueiris_url}/image/{bi_name}?q=100&s=100"
+            base_uri = f"{blueiris_url}/image/{bi_name}"
+            self.blueiris_uri = f"{base_uri}?{BI_DETECT_PARAMS}"
+            self.full_uri = f"{base_uri}?{BI_FULL_PARAMS}"
         else:
             self.blueiris_uri = None
+            self.full_uri = None
         road_line_raw = config.get("road_line", None)
         if road_line_raw == "all":
             self.road_line = "all"
@@ -207,7 +220,38 @@ class Camera:
                 self.error = "bad file"
         return None
 
+    def full_image(self):
+        """Full-resolution frame, fetched lazily and cached for this cycle.
+
+        notify.py crops at native resolution for push images and alpr.py for
+        plate reads, so those need the real frame -- but detection does not,
+        and it runs every cycle on every camera. Falls back to the detection
+        frame rather than losing the event.
+        """
+        if self._full_image is not None:
+            return self._full_image
+        if not self.full_uri or self.full_uri == self.blueiris_uri:
+            return self.image
+        try:
+            resp = _bi_session.get(self.full_uri, timeout=15)
+            resp.raise_for_status()
+            image = cv2.imdecode(
+                np.frombuffer(resp.content, dtype=np.uint8), cv2.IMREAD_UNCHANGED
+            )
+            if image is None:
+                raise ValueError("undecodable")
+            self._full_image = image
+            return image
+        except Exception:
+            logger.warning(
+                "Full-resolution fetch failed for %s, cropping the detection frame: %s",
+                self.name,
+                sys.exc_info()[1],
+            )
+            return self.image
+
     def capture(self):
+        self._full_image = None
         self.image = None
         self.resized = None
         self.resized2 = None

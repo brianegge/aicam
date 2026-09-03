@@ -28,6 +28,24 @@ def add_centers(predictions):
         center["y"] = bbox["top"] + bbox["height"] / 2.0
 
 
+# Once a class has been accepted on a camera, keep accepting it at a much lower
+# confidence for a while. A stationary object's score wobbles: the car parked at
+# peach tree ranged 0.58-0.93 against a 0.70 threshold and dropped in and out of
+# the published count 156 times in one run. cam.objects already did this, but it
+# is rebuilt every frame, so it only ever bridged a single missed frame -- not
+# two consecutive dips, and not a capture error.
+OBJECT_HOLD_SECONDS = 60
+HOLD_PROBABILITY = 0.4
+
+
+def recently_seen(recent_objects, tag_name, now, hold_seconds=OBJECT_HOLD_SECONDS):
+    """Was this class accepted on this camera recently enough to hold it?"""
+    seen_at = recent_objects.get(tag_name)
+    if seen_at is None:
+        return False
+    return (now - seen_at).total_seconds() < hold_seconds
+
+
 def threshold_for(tag_name, thresholds, dark_thresholds, default):
     """New-object threshold for a class, preferring the dark override.
 
@@ -82,6 +100,7 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         model_name += "+vehicle"
     prediction_time = timer() - prediction_start
     notify_time = 0.0
+    hold_now = datetime.now()
     # filter out lower predictions
     predictions = list(
         filter(
@@ -89,7 +108,10 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
             > threshold_for(
                 p["tagName"], config["thresholds"], dark_thresholds, threshold
             )
-            or (p["tagName"] in cam.objects and p["probability"] > 0.4),
+            or (
+                recently_seen(cam.recent_objects, p["tagName"], hold_now)
+                and p["probability"] > HOLD_PROBABILITY
+            ),
             predictions,
         )
     )
@@ -154,6 +176,9 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
 
     valid_predictions = list(filter(lambda p: not ("ignore" in p), predictions))
     valid_objects = set(p["tagName"] for p in valid_predictions)
+    # Refresh the hold so a class that keeps being seen keeps its low bar.
+    for tag_name in valid_objects:
+        cam.recent_objects[tag_name] = hold_now
     departed_objects = cam.objects - valid_objects
 
     yyyymmdd = date.today().strftime("%Y%m%d")

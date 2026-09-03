@@ -29,6 +29,6 @@ jobs:
         with:
           python-version: "3.10"
       - name: Install test dependencies
-        run: pip install pytest opencv-python-headless numpy requests pillow
+        run: pip install pytest opencv-python-headless numpy requests pillow humanize
       - name: Run tests
         run: pytest camera_test.py utils_test.py logsetup_test.py yolov4_detection_test.py codeproject_test.py alpr_test.py ultralytics_detection_test.py detect_test.py -v

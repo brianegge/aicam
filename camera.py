@@ -36,6 +36,20 @@ BI_BREAKER_SECONDS = 60.0
 # The cameras stamp an OSD clock into every frame, so identical bytes should
 # mean frozen — the margin covers a truly static re-encode.
 BI_FROZEN_THRESHOLD = 3
+# Tolerate this many consecutive failures before backing off at all. Blue Iris
+# drops roughly one request in ten under normal load, and doubling from the
+# first failure turned that into 65% of camera samples being skipped -- 6 real
+# failures on one camera produced 15 skipped cycles. A transient blip should
+# cost the next cycle's retry, nothing more; the exponential curve is for a
+# camera that is actually gone.
+BACKOFF_AFTER_FAILURES = 3
+
+
+def backoff_cycles(fails):
+    """Cycles to skip after `fails` consecutive capture failures."""
+    if fails <= BACKOFF_AFTER_FAILURES:
+        return 0
+    return 2 ** min(fails - BACKOFF_AFTER_FAILURES - 1, 6)
 # In blueiris-only mode there is no direct snapshot to escalate to, and Blue
 # Iris legitimately repeats frames for cameras it is limit-decoding, so a short
 # run means "idle", not "broken". Only a run this long is worth warning about.
@@ -231,8 +245,8 @@ class Camera:
                 self.image_hash = 0
                 self.source = None
                 self.resized = None
-                self.skip = 2 ** min(self.fails, 6)
                 self.fails += 1
+                self.skip = backoff_cycles(self.fails)
                 return self
             try:
                 with self._get_session().get(
@@ -256,12 +270,13 @@ class Camera:
                     self.image_hash = 0
                     self.source = None
                     self.resized = None
-                    # Cap the backoff: uncapped, a camera that was down for
-                    # hours earned ~20-minute capture blackouts (mailbox hit
-                    # skip=700 on 2026-09-01) and kept coasting long after it
-                    # recovered. 64 cycles is ~1-2 minutes at scan cadence.
-                    self.skip = 2 ** min(self.fails, 6)
+                    # Capped and delayed: uncapped, a camera down for hours
+                    # earned ~20-minute blackouts (mailbox hit skip=700 on
+                    # 2026-09-01). Backing off from the very first failure was
+                    # just as bad in the other direction -- see
+                    # BACKOFF_AFTER_FAILURES.
                     self.fails += 1
+                    self.skip = backoff_cycles(self.fails)
                     if self.skip > 3:
                         self.reboot()
         return self

@@ -146,8 +146,9 @@ def test_blueiris_only_skips_direct_fallback():
     direct_session.get.assert_not_called()
     assert cam.image is None
     assert cam.error == "no-bi"
-    # Still backs off, so a camera BI cannot serve is not retried every cycle.
-    assert cam.skip == 1
+    # A single failure costs nothing but the next retry; sustained failure
+    # still backs off (see BACKOFF_AFTER_FAILURES).
+    assert cam.skip == 0
     assert cam.fails == 1
 
 
@@ -287,3 +288,39 @@ def test_capture_backoff_is_capped():
             cam.capture()
     assert cam.skip == 64
     assert cam.fails == 51
+
+
+# --- backoff grace ----------------------------------------------------------
+
+
+def test_transient_failures_do_not_cost_cycles():
+    """Blue Iris drops ~1 request in 10. Backing off from the first failure
+    turned that into 65% of camera samples being skipped."""
+    from camera import backoff_cycles
+
+    assert backoff_cycles(1) == 0
+    assert backoff_cycles(2) == 0
+    assert backoff_cycles(3) == 0
+
+
+def test_sustained_failure_still_backs_off():
+    from camera import backoff_cycles
+
+    assert backoff_cycles(4) == 1
+    assert backoff_cycles(5) == 2
+    assert backoff_cycles(6) == 4
+
+
+def test_backoff_is_still_capped():
+    """A camera down for hours previously earned ~20-minute blackouts."""
+    from camera import backoff_cycles
+
+    assert backoff_cycles(100) == 64
+    assert max(backoff_cycles(n) for n in range(1, 200)) == 64
+
+
+def test_backoff_is_monotonic():
+    from camera import backoff_cycles
+
+    seq = [backoff_cycles(n) for n in range(1, 30)]
+    assert seq == sorted(seq)

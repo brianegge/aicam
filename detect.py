@@ -28,8 +28,33 @@ def add_centers(predictions):
         center["y"] = bbox["top"] + bbox["height"] / 2.0
 
 
+def threshold_for(tag_name, thresholds, dark_thresholds, default):
+    """New-object threshold for a class, preferring the dark override.
+
+    IR floodlight glare reads as a vehicle to the detector: overnight on
+    2026-09-03 the driveway and peach tree produced 147 vehicle detections
+    topping out at 0.88, none of them real. Raising the bar only while it is
+    actually dark keeps daytime recall, where the same class legitimately
+    scores 0.85-0.95.
+    """
+    if dark_thresholds is not None:
+        override = dark_thresholds.get(tag_name)
+        if override is not None:
+            return float(override)
+    configured = thresholds.get(tag_name)
+    return float(configured) if configured is not None else default
+
+
 def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     threshold = config["detector"].getfloat("threshold")
+    # Only ask Home Assistant if a dark override is actually configured.
+    dark_thresholds = None
+    if "thresholds-dark" in config:
+        try:
+            if ha.is_dark():
+                dark_thresholds = config["thresholds-dark"]
+        except Exception:
+            logger.warning("Could not read is_dark; using daytime thresholds")
     image = cam.image
     if image is None:
         return 0, 0, "{}=[err={}]".format(cam.name, cam.error)
@@ -61,7 +86,9 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     predictions = list(
         filter(
             lambda p: p["probability"]
-            > config["thresholds"].getfloat(p["tagName"], threshold)
+            > threshold_for(
+                p["tagName"], config["thresholds"], dark_thresholds, threshold
+            )
             or (p["tagName"] in cam.objects and p["probability"] > 0.4),
             predictions,
         )

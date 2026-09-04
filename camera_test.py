@@ -263,6 +263,44 @@ def test_capture_blueiris_processing_failure_leaves_no_partial_state():
     assert cam.resized is None
 
 
+def _set_sizes(ipcams, vehicle):
+    """Point camera.resize() at the given (width, height) model geometry."""
+    return mock.patch.multiple(
+        camera_mod, IPCAMS_INPUT_SIZE=ipcams, VEHICLE_INPUT_SIZE=vehicle
+    )
+
+
+def test_resize_feeds_each_model_its_own_geometry():
+    """The vehicle model may be rectangular while the ipcams models are square;
+    resized2 must follow the vehicle model, not the ipcams one."""
+    cam = _make_camera()
+    cam.image = np.full((720, 1280, 3), 40, dtype=np.uint8)
+    cam.image[:, :, 0] = 200  # blue: hue 120. Red would be hue 0 -> grey path
+    with _set_sizes((608, 608), (1088, 608)):
+        cam.resize()
+    assert cam.resized.shape == (608, 608, 3)
+    assert cam.resized2.shape == (608, 1088, 3)
+
+
+def test_resize_grey_path_feeds_each_model_its_own_geometry():
+    cam = _make_camera()
+    cam.image = np.zeros((720, 1280, 3), dtype=np.uint8)  # hue sum 0 -> IR frame
+    with _set_sizes((608, 608), (1088, 608)):
+        cam.resize()
+    assert cam.resized.shape == (608, 608)  # greyscale, no channel axis
+    assert cam.resized2.shape == (608, 1088, 3)
+
+
+def test_resize_aliases_when_geometry_matches():
+    """Equal sizes must keep sharing one array -- the colour path resizes once."""
+    cam = _make_camera()
+    cam.image = np.full((720, 1280, 3), 40, dtype=np.uint8)
+    cam.image[:, :, 0] = 200
+    with _set_sizes((608, 608), (608, 608)):
+        cam.resize()
+    assert cam.resized2 is cam.resized
+
+
 def test_capture_blueiris_undecodable_signals_fallback():
     cam = _make_camera()
     with mock.patch.object(camera_mod, "_bi_session") as bi:

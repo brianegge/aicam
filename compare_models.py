@@ -12,6 +12,13 @@ whatever thresholds you are really running.
         --old vehicles_yolov4.onnx --old-backend yolov4 \\
         --new best.onnx --new-backend ultralytics \\
         --labels package,vehicle --threshold package=0.55 --threshold vehicle=0.70
+
+Models with different input geometry are compared by pointing each at the
+dataset version rendered for it. Both are stretches of the same source frames
+and YOLO labels are normalised, so the ground truth is identical:
+
+    ... --old-size 608x608 --old-dataset ~/train/packages-vehicles2-v11 \\
+        --new-size 1088x608 --new-dataset ~/train/pv-v12-rect
 """
 
 import argparse
@@ -21,14 +28,20 @@ import time
 
 import cv2
 
-MODEL_SIZE = 608
+DEFAULT_SIZE = "608x608"
 
 
-def build_model(onnx_path, backend, labels):
+def parse_size(text):
+    width, _, height = text.lower().partition("x")
+    return int(width), int(height)
+
+
+def build_model(onnx_path, backend, labels, size):
+    width, height = size
     config = {
         "onnx": onnx_path,
-        "width": str(MODEL_SIZE),
-        "height": str(MODEL_SIZE),
+        "width": str(width),
+        "height": str(height),
         "channels": "3",
         "prob_threshold": "0.10",
     }
@@ -65,7 +78,7 @@ def load_ground_truth(label_path):
     return boxes
 
 
-def evaluate(model, name, root, labels, thresholds):
+def evaluate(model, name, root, labels, thresholds, size):
     tp = dict((c, 0) for c in labels)
     fp = dict((c, 0) for c in labels)
     fn = dict((c, 0) for c in labels)
@@ -77,9 +90,7 @@ def evaluate(model, name, root, labels, thresholds):
         if image is None:
             continue
         # exactly what camera.py hands a model: squashed to the model size, RGB
-        resized = cv2.cvtColor(
-            cv2.resize(image, (MODEL_SIZE, MODEL_SIZE)), cv2.COLOR_BGR2RGB
-        )
+        resized = cv2.cvtColor(cv2.resize(image, size), cv2.COLOR_BGR2RGB)
         started = time.perf_counter()
         predictions = model.predict_image(resized)
         total_ms += (time.perf_counter() - started) * 1000
@@ -135,8 +146,12 @@ def main():
     parser.add_argument("--labels", required=True, help="comma separated, in class-id order")
     parser.add_argument("--old", required=True)
     parser.add_argument("--old-backend", default="yolov4")
+    parser.add_argument("--old-size", default=DEFAULT_SIZE, help="WxH input geometry")
+    parser.add_argument("--old-dataset", help="overrides --dataset for this model")
     parser.add_argument("--new", required=True)
     parser.add_argument("--new-backend", default="ultralytics")
+    parser.add_argument("--new-size", default=DEFAULT_SIZE, help="WxH input geometry")
+    parser.add_argument("--new-dataset", help="overrides --dataset for this model")
     parser.add_argument(
         "--threshold",
         action="append",
@@ -152,11 +167,19 @@ def main():
         name, _, value = item.partition("=")
         thresholds[name.strip()] = float(value)
 
-    root = os.path.join(os.path.expanduser(args.dataset), args.split)
-    print("split: %s" % root)
+    def split_root(dataset):
+        return os.path.join(os.path.expanduser(dataset or args.dataset), args.split)
+
+    old_size = parse_size(args.old_size)
+    new_size = parse_size(args.new_size)
     print("thresholds: %s" % thresholds)
-    evaluate(build_model(args.old, args.old_backend, labels), "OLD %s" % args.old, root, labels, thresholds)
-    evaluate(build_model(args.new, args.new_backend, labels), "NEW %s" % args.new, root, labels, thresholds)
+    for tag, onnx, backend, size, dataset in (
+        ("OLD", args.old, args.old_backend, old_size, args.old_dataset),
+        ("NEW", args.new, args.new_backend, new_size, args.new_dataset),
+    ):
+        root = split_root(dataset)
+        name = "%s %s (%dx%d) %s" % (tag, onnx, size[0], size[1], root)
+        evaluate(build_model(onnx, backend, labels, size), name, root, labels, thresholds, size)
 
 
 if __name__ == "__main__":

@@ -65,6 +65,74 @@ def threshold_for(tag_name, thresholds, dark_thresholds, default):
     return float(configured) if configured is not None else default
 
 
+def apply_thresholds(
+    predictions, thresholds, dark_thresholds, default, recent_objects, now
+):
+    """Drop predictions under their class threshold, except held-over ones.
+
+    A prediction that only survives on the hysteresis hold is marked
+    `hold_only`. Such a detection may sustain an already-tracked object but
+    must never create a new one -- see track_predictions(). The hold is keyed
+    by class, so two cars parked on the peach tree camera kept `vehicle`
+    permanently fresh; without the mark, every scrap of detector noise above
+    HOLD_PROBABILITY became an unmatched new object at age=0 and notified.
+    """
+    kept = []
+    for p in predictions:
+        if p["probability"] > threshold_for(
+            p["tagName"], thresholds, dark_thresholds, default
+        ):
+            kept.append(p)
+        elif (
+            recently_seen(recent_objects, p["tagName"], now)
+            and p["probability"] > HOLD_PROBABILITY
+        ):
+            p["hold_only"] = True
+            kept.append(p)
+    return kept
+
+
+def track_predictions(valid_predictions, prev_predictions, new_predictions):
+    """Match this frame's predictions to the tracks carried from earlier ones.
+
+    Returns (tracked_pairs, unmatched_holds). A matched prediction inherits the
+    track's age and state; an unmatched one starts a new track and is appended
+    to `new_predictions` -- unless it is `hold_only`, in which case it is
+    under-threshold noise that matched nothing and is returned for the caller
+    to discard.
+    """
+    tracked_pairs = []
+    unmatched_holds = []
+    for p in valid_predictions:
+        this_box = p["boundingBox"]
+        this_name = p["tagName"]
+        prev_class = prev_predictions.setdefault(this_name, [])
+        for prev in prev_class:
+            iou = bb_intersection_over_union(prev["boundingBox"], this_box)
+            logger.debug(f"iou {this_name} = prev_box & this_box = {iou}")
+            if iou > 0.5:
+                p["iou"] = iou
+                prev["boundingBox"] = this_box  # move the box to current
+                prev["last_time"] = datetime.now()
+                prev["age"] = prev["age"] + 1
+                for t in ["age", "ignore", "priority", "priority_type"] + list(
+                    ALPR_STATE_KEYS
+                ):
+                    if t in prev:
+                        p[t] = prev[t]
+                tracked_pairs.append((p, prev))
+        if "iou" not in p:
+            if p.get("hold_only"):
+                unmatched_holds.append(p)
+                continue
+            p["start_time"] = datetime.now()
+            p["last_time"] = datetime.now()
+            p["age"] = 0
+            prev_class.append(p)
+            new_predictions.append(p)
+    return tracked_pairs, unmatched_holds
+
+
 def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     threshold = config["detector"].getfloat("threshold")
     # Only ask Home Assistant if a dark override is actually configured.
@@ -103,19 +171,13 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     prediction_time = timer() - prediction_start
     notify_time = 0.0
     hold_now = datetime.now()
-    # filter out lower predictions
-    predictions = list(
-        filter(
-            lambda p: p["probability"]
-            > threshold_for(
-                p["tagName"], config["thresholds"], dark_thresholds, threshold
-            )
-            or (
-                recently_seen(cam.recent_objects, p["tagName"], hold_now)
-                and p["probability"] > HOLD_PROBABILITY
-            ),
-            predictions,
-        )
+    predictions = apply_thresholds(
+        predictions,
+        config["thresholds"],
+        dark_thresholds,
+        threshold,
+        cam.recent_objects,
+        hold_now,
     )
     for p in predictions:
         p["camName"] = cam.name
@@ -178,8 +240,13 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
 
     valid_predictions = list(filter(lambda p: not ("ignore" in p), predictions))
     valid_objects = set(p["tagName"] for p in valid_predictions)
-    # Refresh the hold so a class that keeps being seen keeps its low bar.
-    for tag_name in valid_objects:
+    # Refresh the hold so a class that keeps being seen keeps its low bar --
+    # but only from detections that cleared the threshold on their own. If
+    # held-over detections could refresh it, detector noise would keep its own
+    # low bar armed indefinitely once anything opened it.
+    for tag_name in set(
+        p["tagName"] for p in valid_predictions if not p.get("hold_only")
+    ):
         cam.recent_objects[tag_name] = hold_now
     departed_objects = cam.objects - valid_objects
 
@@ -233,32 +300,13 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     new_predictions = []
     # (current frame prediction, tracked prediction) for everything matched to
     # an existing track, so state notify() sets can be written back afterwards.
-    tracked_pairs = []
-    for p in valid_predictions:
-        this_box = p["boundingBox"]
-        this_name = p["tagName"]
-        prev_class = cam.prev_predictions.setdefault(p["tagName"], [])
-        for prev in prev_class:
-            prev_box = prev["boundingBox"]
-            iou = bb_intersection_over_union(prev_box, this_box)
-            logger.debug(f"iou {cam.name}:{this_name} = prev_box & this_box = {iou}")
-            if iou > 0.5:
-                p["iou"] = iou
-                prev["boundingBox"] = this_box  # move the box to current
-                prev["last_time"] = datetime.now()
-                prev["age"] = prev["age"] + 1
-                for t in ["age", "ignore", "priority", "priority_type"] + list(
-                    ALPR_STATE_KEYS
-                ):
-                    if t in prev:
-                        p[t] = prev[t]
-                tracked_pairs.append((p, prev))
-        if "iou" not in p:
-            p["start_time"] = datetime.now()
-            p["last_time"] = datetime.now()
-            p["age"] = 0
-            prev_class.append(p)
-            new_predictions.append(p)
+    tracked_pairs, unmatched_holds = track_predictions(
+        valid_predictions, cam.prev_predictions, new_predictions
+    )
+    if unmatched_holds:
+        dropped = set(id(p) for p in unmatched_holds)
+        predictions = [p for p in predictions if id(p) not in dropped]
+        valid_predictions = [p for p in valid_predictions if id(p) not in dropped]
     expired = []
     for prev_tag, prev_class in cam.prev_predictions.items():
         for x in prev_class:

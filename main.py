@@ -21,7 +21,7 @@ import paho.mqtt.client as paho
 import requests
 import sdnotify
 
-from camera import Camera
+from camera import Camera, set_model_input_sizes
 from detect import detect
 from homeassistant import HomeAssistant
 from logsetup import setup_syslog
@@ -369,6 +369,7 @@ async def main(options: argparse.Namespace) -> None:
     grey_model = load_model(grey_model_config, labels, options.trt)
     sd.notify("STATUS=Loading vehicle/packages model")
     vehicle_model = load_model(config["vehicle-model"], vehicle_labels, options.trt)
+    set_model_input_sizes(color_model, vehicle_model)
     sd.notify("STATUS=Loaded models")
 
     blueiris_url = config.get("blueiris", "url", fallback=None)

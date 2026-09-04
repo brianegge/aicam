@@ -44,6 +44,20 @@ BI_FROZEN_THRESHOLD = 3
 # frame is actually going to be cropped for a notification or for ALPR.
 BI_DETECT_PARAMS = "q=85&w=1088"
 BI_FULL_PARAMS = "q=100&s=100"
+# Model input geometry, as (width, height). The ipcams color/grey models are
+# square; the vehicle/packages model need not be -- a 1088x608 model matches the
+# cameras' 16:9 framing instead of squashing it, and measured better at the
+# operational thresholds. set_model_input_sizes() points these at whatever the
+# loaded models actually declare, so a model swap does not need a code change.
+IPCAMS_INPUT_SIZE = (608, 608)
+VEHICLE_INPUT_SIZE = (608, 608)
+
+
+def set_model_input_sizes(ipcams_model, vehicle_model):
+    """Point resize() at the geometry the loaded models actually want."""
+    global IPCAMS_INPUT_SIZE, VEHICLE_INPUT_SIZE
+    IPCAMS_INPUT_SIZE = (ipcams_model.model_width, ipcams_model.model_height)
+    VEHICLE_INPUT_SIZE = (vehicle_model.model_width, vehicle_model.model_height)
 # Tolerate this many consecutive failures before backing off at all. Blue Iris
 # drops roughly one request in ten under normal load, and doubling from the
 # first failure turned that into 65% of camera samples being skipped -- 6 real
@@ -443,11 +457,16 @@ class Camera:
         sum = np.sum(hsv[:, :, 0])
         if sum == 0:
             self.resized2 = cv2.resize(
-                cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB), (608, 608)
+                cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB), VEHICLE_INPUT_SIZE
             )
             self.image = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
-            self.resized = cv2.resize(self.image, (608, 608))
+            self.resized = cv2.resize(self.image, IPCAMS_INPUT_SIZE)
         else:
-            resized = cv2.resize(self.image, (608, 608))
+            resized = cv2.resize(self.image, IPCAMS_INPUT_SIZE)
             self.resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-            self.resized2 = self.resized
+            if VEHICLE_INPUT_SIZE == IPCAMS_INPUT_SIZE:
+                self.resized2 = self.resized
+            else:
+                self.resized2 = cv2.cvtColor(
+                    cv2.resize(self.image, VEHICLE_INPUT_SIZE), cv2.COLOR_BGR2RGB
+                )

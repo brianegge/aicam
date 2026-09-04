@@ -240,14 +240,6 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
 
     valid_predictions = list(filter(lambda p: not ("ignore" in p), predictions))
     valid_objects = set(p["tagName"] for p in valid_predictions)
-    # Refresh the hold so a class that keeps being seen keeps its low bar --
-    # but only from detections that cleared the threshold on their own. If
-    # held-over detections could refresh it, detector noise would keep its own
-    # low bar armed indefinitely once anything opened it.
-    for tag_name in set(
-        p["tagName"] for p in valid_predictions if not p.get("hold_only")
-    ):
-        cam.recent_objects[tag_name] = hold_now
     departed_objects = cam.objects - valid_objects
 
     # Routine polling deliberately fetches a small frame -- the model only
@@ -307,6 +299,16 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         dropped = set(id(p) for p in unmatched_holds)
         predictions = [p for p in predictions if id(p) not in dropped]
         valid_predictions = [p for p in valid_predictions if id(p) not in dropped]
+    # Refresh the hold, now that we know which detections matched a track.
+    # Anything that survived here either cleared its threshold on its own or is
+    # a held detection still tracking a real object, and both should keep the
+    # low bar armed -- a car parked in poor light scored 0.17-0.53 for nine
+    # straight sweeps, and refreshing only from above-threshold detections
+    # capped the hold at OBJECT_HOLD_SECONDS, dropped the car, expired its
+    # track and made the next good frame a fresh arrival. Unmatched holds are
+    # already gone by this point, so noise cannot arm its own bar.
+    for tag_name in set(p["tagName"] for p in valid_predictions):
+        cam.recent_objects[tag_name] = hold_now
     expired = []
     for prev_tag, prev_class in cam.prev_predictions.items():
         for x in prev_class:

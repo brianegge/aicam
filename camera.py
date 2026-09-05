@@ -25,13 +25,26 @@ _bi_session = requests.Session()
 _bi_session.mount("http://", _bi_adapter)
 _bi_session.mount("https://", _bi_adapter)
 
-# Circuit breaker for the shared BI host: without it, a BI outage makes all
-# cameras each burn the 10s BI timeout before their direct fallback, every
-# cycle. Races on these globals are benign (worst case one extra probe).
-_bi_fail_count = 0
-_bi_skip_until = 0.0
+# Circuit breaker for a shared snapshot host: without it, an outage makes all
+# cameras each burn the 10s timeout before their direct fallback, every cycle.
+# Races on these are benign (worst case one extra probe).
+#
+# Keyed by host:port, NOT global. Cameras now draw from two independent
+# services -- Blue Iris and Frigate's go2rtc on another machine -- and a single
+# shared counter meant powering Blue Iris down tripped the breaker for the
+# go2rtc cameras too, blacking out all 15 cameras when only 10 had lost their
+# source.
+_breaker_fails = {}
+_breaker_until = {}
 BI_BREAKER_FAILURES = 3
 BI_BREAKER_SECONDS = 60.0
+
+
+def _breaker_key(uri):
+    """Which host's breaker a request belongs to."""
+    if not uri:
+        return ""
+    return urlparse(uri).netloc
 # Consecutive identical frames before declaring the stream into BI frozen.
 # The cameras stamp an OSD clock into every frame, so identical bytes should
 # mean frozen — the margin covers a truly static re-encode.
@@ -346,8 +359,8 @@ class Camera:
         on any failure — including a stream frozen for BI_FROZEN_THRESHOLD
         cycles — means the caller should try the camera directly.
         """
-        global _bi_fail_count, _bi_skip_until
-        if time.monotonic() < _bi_skip_until:
+        key = _breaker_key(self.blueiris_uri)
+        if time.monotonic() < _breaker_until.get(key, 0.0):
             return False
         try:
             resp = _bi_session.get(self.blueiris_uri, timeout=10)
@@ -357,12 +370,14 @@ class Camera:
                 logger.warning(f"Blue Iris returned empty image for {self.name}")
                 return False
         except Exception:
-            _bi_fail_count += 1
-            if _bi_fail_count >= BI_BREAKER_FAILURES:
-                _bi_skip_until = time.monotonic() + BI_BREAKER_SECONDS
+            fails = _breaker_fails.get(key, 0) + 1
+            _breaker_fails[key] = fails
+            if fails >= BI_BREAKER_FAILURES:
+                _breaker_until[key] = time.monotonic() + BI_BREAKER_SECONDS
                 logger.warning(
-                    "Blue Iris down (%d straight failures) — direct snapshots for %ds",
-                    _bi_fail_count,
+                    "Snapshot host %s down (%d straight failures) — skipping it for %ds",
+                    key,
+                    fails,
                     int(BI_BREAKER_SECONDS),
                 )
             else:
@@ -370,7 +385,7 @@ class Camera:
                     f"Blue Iris capture failed for {self.name}, falling back to camera: {sys.exc_info()[1]}"
                 )
             return False
-        _bi_fail_count = 0
+        _breaker_fails[key] = 0
         # Hash the raw response before decoding: cheap, and it lets a frozen
         # stream short-circuit ahead of the decode. Tracked in a BI-only
         # field — the direct and FTP paths write self.image_hash, and sharing

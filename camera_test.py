@@ -17,11 +17,11 @@ from camera import Camera
 
 @pytest.fixture(autouse=True)
 def _reset_bi_breaker():
-    camera_mod._bi_fail_count = 0
-    camera_mod._bi_skip_until = 0.0
+    camera_mod._breaker_fails.clear()
+    camera_mod._breaker_until.clear()
     yield
-    camera_mod._bi_fail_count = 0
-    camera_mod._bi_skip_until = 0.0
+    camera_mod._breaker_fails.clear()
+    camera_mod._breaker_until.clear()
 
 
 def _jpeg_bytes(seed=0):
@@ -245,7 +245,7 @@ def test_capture_blueiris_circuit_breaker_opens_after_failures():
         bi.get.side_effect = OSError("down")
         for _ in range(camera_mod.BI_BREAKER_FAILURES):
             assert cam._capture_blueiris() is False
-        assert camera_mod._bi_skip_until > 0
+        assert any(v > 0 for v in camera_mod._breaker_until.values())
         bi.get.reset_mock()
         assert cam._capture_blueiris() is False  # breaker open
         bi.get.assert_not_called()
@@ -412,3 +412,42 @@ def test_snapshot_url_camera_does_not_double_fetch():
     with mock.patch.object(camera_mod, "_bi_session") as bi:
         assert cam.full_image() == "detection-frame"
         bi.get.assert_not_called()
+
+
+def test_breaker_is_per_host_not_global():
+    """Powering down Blue Iris must not black out the Frigate cameras.
+
+    Cameras draw from two independent services now. A single shared counter
+    meant three Blue Iris failures opened the breaker for go2rtc on another
+    machine too, taking all 15 cameras down when only 10 had lost their source.
+    """
+    bi_cam = _make_camera(blueiris_only=True)
+    frigate_cam = _make_camera(
+        blueiris_only=True,
+        **{"snapshot-url": "http://ubuntu24.home:1984/api/frame.jpeg?src=shed"},
+    )
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        # Blue Iris is unreachable; go2rtc is fine.
+        def by_host(url, **kwargs):
+            if "1984" in url:
+                return _response(_jpeg_bytes(seed=5))
+            raise OSError("connection refused")
+
+        bi.get.side_effect = by_host
+        for _ in range(camera_mod.BI_BREAKER_FAILURES + 2):
+            bi_cam._capture_blueiris()
+        # The Blue Iris breaker is open...
+        assert camera_mod._breaker_until.get("blueiris-3.home:81", 0) > 0
+        # ...but the Frigate host's is untouched and still serves frames.
+        assert camera_mod._breaker_until.get("ubuntu24.home:1984", 0) == 0
+        assert frigate_cam._capture_blueiris() is True
+        assert frigate_cam.image is not None
+
+
+def test_breaker_opens_per_host_independently():
+    cam = _make_camera(blueiris_only=True)
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        bi.get.side_effect = OSError("down")
+        for _ in range(camera_mod.BI_BREAKER_FAILURES):
+            cam._capture_blueiris()
+    assert list(camera_mod._breaker_until) == ["blueiris-3.home:81"]

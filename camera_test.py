@@ -451,3 +451,38 @@ def test_breaker_opens_per_host_independently():
         for _ in range(camera_mod.BI_BREAKER_FAILURES):
             cam._capture_blueiris()
     assert list(camera_mod._breaker_until) == ["blueiris-3.home:81"]
+
+
+def test_http_error_does_not_trip_the_host_breaker():
+    """One camera's unready stream must not black out the whole fleet.
+
+    All 14 cameras now sit behind a single go2rtc, so they share one breaker
+    key. go2rtc returns HTTP 500 for a stream it has not finished warming;
+    treating that as "host down" tripped the breaker for every camera at once
+    and stopped detection for 60s at a time.
+    """
+    cam = _make_camera(
+        blueiris_only=True,
+        **{"snapshot-url": "http://frigate.home:1984/api/frame.jpeg?src=garden"},
+    )
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        bi.get.return_value = _response(b"", status=500)
+        for _ in range(camera_mod.BI_BREAKER_FAILURES + 2):
+            assert cam._capture_blueiris() is False
+    # host answered, so it is up: breaker must stay shut
+    assert camera_mod._breaker_until.get("frigate.home:1984", 0) == 0
+
+
+def test_connection_failure_still_trips_the_host_breaker():
+    """A genuinely unreachable host must still be skipped."""
+    cam = _make_camera(
+        blueiris_only=True,
+        **{"snapshot-url": "http://frigate.home:1984/api/frame.jpeg?src=garden"},
+    )
+    import requests
+
+    with mock.patch.object(camera_mod, "_bi_session") as bi:
+        bi.get.side_effect = requests.exceptions.ConnectTimeout("no route")
+        for _ in range(camera_mod.BI_BREAKER_FAILURES):
+            cam._capture_blueiris()
+    assert camera_mod._breaker_until.get("frigate.home:1984", 0) > 0

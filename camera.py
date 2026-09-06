@@ -369,20 +369,36 @@ class Camera:
             if len(content) == 0:
                 logger.warning(f"Blue Iris returned empty image for {self.name}")
                 return False
-        except Exception:
+        except Exception as e:
+            # Only a transport failure means the *host* is down. An HTTP error
+            # status means the host answered and is therefore up -- it just
+            # cannot serve that one camera, typically because go2rtc has not
+            # finished warming that stream.
+            #
+            # This distinction became critical once every camera moved behind a
+            # single go2rtc: with all 14 sharing one host key, three HTTP 500s
+            # from one unready stream tripped the breaker for the entire fleet
+            # and blacked out detection for 60s at a time, repeatedly.
+            if isinstance(e, requests.exceptions.HTTPError):
+                logger.warning(
+                    "Snapshot for %s failed: %s (host is up; not tripping the breaker)",
+                    self.name,
+                    e,
+                )
+                return False
             fails = _breaker_fails.get(key, 0) + 1
             _breaker_fails[key] = fails
             if fails >= BI_BREAKER_FAILURES:
                 _breaker_until[key] = time.monotonic() + BI_BREAKER_SECONDS
                 logger.warning(
-                    "Snapshot host %s down (%d straight failures) — skipping it for %ds",
+                    "Snapshot host %s unreachable (%d straight failures) — skipping it for %ds",
                     key,
                     fails,
                     int(BI_BREAKER_SECONDS),
                 )
             else:
                 logger.warning(
-                    f"Blue Iris capture failed for {self.name}, falling back to camera: {sys.exc_info()[1]}"
+                    f"Blue Iris capture failed for {self.name}, falling back to camera: {e}"
                 )
             return False
         _breaker_fails[key] = 0

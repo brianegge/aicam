@@ -12,6 +12,7 @@ import humanize
 from PIL import Image
 
 import alpr
+import frigate_lpr
 from alpr import ALPR_STATE_KEYS, wants_alpr
 from notify import notify
 from utils import bb_intersection_over_union, draw_bbox, draw_road
@@ -404,13 +405,21 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     new_plates = []
     if vehicles_due:
         try:
-            # Clean pixels, not im_pil: no reason to hand the reader an image
-            # with bounding boxes drawn over it.
-            if isinstance(image, Image.Image):
-                alpr_image = image
+            if "frigate" in config:
+                # Frigate does the recognition itself, on its own crops, so
+                # there is no image to send -- see frigate_lpr for why matching
+                # is by camera and time rather than by bounding box.
+                new_plates = frigate_lpr.read_plates(cam, vehicles_due, config)
             else:
-                alpr_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-            new_plates = alpr.read_plates(cam, alpr_image, vehicles_due, config)
+                # Clean pixels, not im_pil: no reason to hand the reader an
+                # image with bounding boxes drawn over it.
+                if isinstance(image, Image.Image):
+                    alpr_image = image
+                else:
+                    alpr_image = Image.fromarray(
+                        cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                    )
+                new_plates = alpr.read_plates(cam, alpr_image, vehicles_due, config)
         except Exception:
             logger.exception("ALPR pass failed for %s", cam.name)
 

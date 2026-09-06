@@ -57,6 +57,15 @@ BI_FROZEN_THRESHOLD = 3
 # frame is actually going to be cropped for a notification or for ALPR.
 BI_DETECT_PARAMS = "q=85&w=1088"
 BI_FULL_PARAMS = "q=100&s=100"
+# Snapshot fetch timeouts. Frigate's go2rtc decodes a 4K HEVC frame on demand
+# and must wait for the next keyframe, so a request legitimately takes ~2s and
+# occasionally much longer -- measured 0.8-2.5s median across cameras with
+# outliers past 8s. At the old 10s this produced a steady trickle of
+# "Read timed out", each one costing a camera its frame and advancing the
+# backoff. The cost of waiting is a slower sweep; the cost of giving up is a
+# blind camera, which is worse.
+SNAPSHOT_TIMEOUT = 25
+FULL_SNAPSHOT_TIMEOUT = 30
 # Model input geometry, as (width, height). The ipcams color/grey models are
 # square; the vehicle/packages model need not be -- a 1088x608 model matches the
 # cameras' 16:9 framing instead of squashing it, and measured better at the
@@ -260,7 +269,7 @@ class Camera:
         if not self.full_uri or self.full_uri == self.blueiris_uri:
             return self.image
         try:
-            resp = _bi_session.get(self.full_uri, timeout=15)
+            resp = _bi_session.get(self.full_uri, timeout=FULL_SNAPSHOT_TIMEOUT)
             resp.raise_for_status()
             image = cv2.imdecode(
                 np.frombuffer(resp.content, dtype=np.uint8), cv2.IMREAD_UNCHANGED
@@ -363,7 +372,7 @@ class Camera:
         if time.monotonic() < _breaker_until.get(key, 0.0):
             return False
         try:
-            resp = _bi_session.get(self.blueiris_uri, timeout=10)
+            resp = _bi_session.get(self.blueiris_uri, timeout=SNAPSHOT_TIMEOUT)
             resp.raise_for_status()
             content = resp.content
             if len(content) == 0:

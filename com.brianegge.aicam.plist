@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd equivalent of aicam.service, for the macOS host.
+
+  Install to ~/Library/LaunchAgents/com.brianegge.aicam.plist and load with
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.brianegge.aicam.plist
+
+  No --trt here: the Mac runs the ONNX Runtime backend with the CoreML
+  execution provider.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.brianegge.aicam</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/claw/aicam/.venv/bin/python</string>
+        <string>-u</string>
+        <string>/Users/claw/aicam/main.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/claw/aicam</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Do not spin if the process dies immediately at startup. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/claw/aicam-data/aicam.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/claw/aicam-data/aicam.log</string>
+
+    <key>ProcessType</key>
+    <string>Standard</string>
+</dict>
+</plist>

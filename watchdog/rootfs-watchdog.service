@@ -1,0 +1,17 @@
+[Unit]
+Description=Reboot when the USB-attached rootfs stops responding
+Documentation=https://github.com/brianegge/aicam/tree/master/watchdog
+# Default dependencies (yes) mean systemd sends SIGTERM before unmounting the
+# rootfs on shutdown, so a normal shutdown/reboot never triggers a sysrq reset.
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/rootfs-watchdog --interval 15 --timeout 90
+Restart=always
+RestartSec=10
+# Keep the daemon resident so it survives the rootfs loss it must detect.
+LimitMEMLOCK=infinity
+OOMScoreAdjust=-1000
+
+[Install]
+WantedBy=multi-user.target

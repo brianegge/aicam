@@ -14,5 +14,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
+      - name: Compile rootfs-watchdog (C)
+        run: gcc -Wall -Werror -O2 -pthread -c watchdog/rootfs-watchdog.c -o /tmp/rw.o
       - name: Check Python syntax
-        run: python -m py_compile main.py detect.py camera.py notify.py homeassistant.py roboflow_upload.py utils.py
+        run: python -m py_compile main.py detect.py camera.py notify.py alpr.py frigate_lpr.py codeproject.py detection_base.py yolov4_detection.py ultralytics_detection.py compare_models.py homeassistant.py roboflow_upload.py utils.py logsetup.py
+      - name: Check syntax against Python 3.6 (deployment target on egge-nano)
+        run: docker run --rm -v "$PWD":/app -w /app python:3.6-slim python -m py_compile main.py detect.py camera.py notify.py alpr.py frigate_lpr.py codeproject.py detection_base.py yolov4_detection.py ultralytics_detection.py compare_models.py homeassistant.py roboflow_upload.py utils.py logsetup.py
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install test dependencies
+        run: pip install pytest opencv-python-headless numpy requests pillow humanize
+      - name: Run tests
+        run: pytest frigate_lpr_test.py camera_test.py utils_test.py logsetup_test.py yolov4_detection_test.py codeproject_test.py alpr_test.py ultralytics_detection_test.py detect_test.py -v

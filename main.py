@@ -21,10 +21,11 @@ import paho.mqtt.client as paho
 import requests
 import sdnotify
 
-from camera import Camera
+from camera import Camera, set_model_input_sizes
 from detect import detect
+from frigate_lpr import frigate_camera_name
 from homeassistant import HomeAssistant
-from object_detection_rtv4 import ONNXTensorRTv4ObjectDetection
+from logsetup import setup_syslog
 from utils import cleanup
 
 log: logging.Logger = logging.getLogger("aicam")
@@ -202,6 +203,14 @@ def on_connect(client: paho.Client, userdata: Any, flags: Dict, rc: int) -> None
     # Subscribe to flag button command topics
     client.subscribe(f"{DEVICE_ID}/+/flag_vehicle/set")
     client.subscribe(f"{DEVICE_ID}/+/flag_detection/set")
+    # Frigate motion, when the snapshot URLs name Frigate streams. Resubscribed
+    # on every reconnect, same as the flag topics.
+    if getattr(client, "_aicam_frigate_cams", None):
+        client.subscribe("frigate/+/motion")
+        mlog.info(
+            "subscribed to frigate/+/motion for %d cameras",
+            len(client._aicam_frigate_cams),
+        )
     publish_discovery(client)
 
 
@@ -213,13 +222,51 @@ def on_disconnect(client: paho.Client, userdata: Any, rc: int) -> None:
     client._reconnect_deadline = time.monotonic() + 300
 
 
+def _handle_frigate_motion(
+    client: paho.Client, frigate_name: str, payload: bytes
+) -> None:
+    """Frigate saw motion: look at that camera now, not at its next slot.
+
+    Frigate evaluates motion on every decoded frame (~5 fps), so this lands
+    within a fraction of a second against a 10 s polling interval.
+
+    It is only a trigger. The payload is a bare ON/OFF with no boxes, and
+    Frigate's own object model tracks COCO classes (person, car, truck, dog,
+    cat) which contain no deer, coyote, fox or raccoon -- the animals this
+    detector exists to classify. So aicam still fetches the frame and runs its
+    own models; Frigate is just telling it when to bother.
+
+    The interval sweep is deliberately left running underneath. Motion goes OFF
+    once an animal settles, and the tracking in detect.py needs regular
+    re-observation to hold a low-confidence object on one track rather than
+    ageing it out and announcing it again as a fresh arrival.
+    """
+    try:
+        state = payload.decode("utf-8", "replace").strip().upper()
+    except Exception:
+        return
+    if state != "ON":
+        return
+    cam = getattr(client, "_aicam_frigate_cams", {}).get(frigate_name)
+    if cam is None:
+        return
+    if not cam.motion_pending:
+        cam.motion_pending = True
+        mlog.info("frigate motion on %s, queued for immediate check", cam.name)
+
+
 def on_message(
     client: paho.Client, userdata: Any, msg: paho.MQTTMessage
 ) -> None:
     """Handle MQTT button presses for flagging images for Roboflow review."""
+    parts = msg.topic.split("/")
+    # Checked before the log line below: motion is high-volume next to button
+    # presses, and logging every message would bury everything else.
+    if len(parts) == 3 and parts[0] == "frigate" and parts[2] == "motion":
+        _handle_frigate_motion(client, parts[1], msg.payload)
+        return
     mlog.info("on_message: %s = %s", msg.topic, msg.payload)
     # Expected topic: aicam/{cam_ha_name}/flag_{model}/set
-    parts = msg.topic.split("/")
     if len(parts) != 4 or parts[0] != DEVICE_ID or parts[3] != "set":
         return
     cam_ha_name = parts[1]
@@ -281,9 +328,47 @@ class GracefulKiller:
         kill_now = True
 
 
+def load_model(model_config, labels, use_trt):
+    """Build a detector on the backend named by the model's config section.
+
+    `backend` selects how the model's output is decoded — "yolov4" (default,
+    the darknet-lineage models) or "ultralytics" (anything retrained on
+    claw-mini, which cannot produce a darknet graph). Models can differ, so the
+    ipcams models stay on YOLOv4 while a retrained vehicle model does not have
+    to.
+
+    Everything is imported lazily: object_detection_rtv4 initializes CUDA at
+    import time, so it can only be touched on the Jetson, and onnxruntime is not
+    installed there.
+    """
+    backend = model_config.get("backend", "yolov4").strip().lower()
+
+    if backend == "ultralytics":
+        if use_trt:
+            raise ValueError(
+                "backend=ultralytics has no TensorRT path; run without --trt"
+            )
+        from ultralytics_detection import ONNXRuntimeUltralyticsObjectDetection
+
+        return ONNXRuntimeUltralyticsObjectDetection(model_config, labels)
+
+    if backend != "yolov4":
+        raise ValueError("Unknown backend %r for model %s" % (backend, labels))
+
+    if use_trt:
+        from object_detection_rtv4 import ONNXTensorRTv4ObjectDetection
+
+        return ONNXTensorRTv4ObjectDetection(model_config, labels)
+
+    from yolov4_detection import ONNXRuntimeYolov4ObjectDetection
+
+    return ONNXRuntimeYolov4ObjectDetection(model_config, labels)
+
+
 async def main(options: argparse.Namespace) -> None:
     config: configparser.ConfigParser = configparser.ConfigParser()
     config.read(options.config_file)
+    setup_syslog(config)
     ha: HomeAssistant = HomeAssistant(config["homeassistant"])
     detector_config: Dict[str, str] = config["detector"]
     color_model_config: Dict[str, str] = config["color-model"]
@@ -326,21 +411,21 @@ async def main(options: argparse.Namespace) -> None:
 
     sd = sdnotify.SystemdNotifier()
     sd.notify("STATUS=Loading color model")
-    color_model = ONNXTensorRTv4ObjectDetection(color_model_config, labels)
+    color_model = load_model(color_model_config, labels, options.trt)
     sd.notify("STATUS=Loading grey model")
-    grey_model = ONNXTensorRTv4ObjectDetection(grey_model_config, labels)
+    grey_model = load_model(grey_model_config, labels, options.trt)
     sd.notify("STATUS=Loading vehicle/packages model")
-    vehicle_model = ONNXTensorRTv4ObjectDetection(
-        config["vehicle-model"], vehicle_labels
-    )
+    vehicle_model = load_model(config["vehicle-model"], vehicle_labels, options.trt)
+    set_model_input_sizes(color_model, vehicle_model)
     sd.notify("STATUS=Loaded models")
 
     blueiris_url = config.get("blueiris", "url", fallback=None)
+    blueiris_only = detector_config.getboolean("blueiris-only", False)
     cams = []
     i = 0
     while "cam%d" % i in config.sections():
         cams.append(
-            Camera(config["cam%d" % i], excludes.get(config["cam%d" % i]["name"], {}), mqtt_client, blueiris_url)
+            Camera(config["cam%d" % i], excludes.get(config["cam%d" % i]["name"], {}), mqtt_client, blueiris_url, blueiris_only)
         )
         i += 1
     log.info("Configured %i cams" % i)
@@ -358,6 +443,15 @@ async def main(options: argparse.Namespace) -> None:
     # Store references for on_message handler
     mqtt_client._aicam_cams = {cam.ha_name: cam for cam in cams}
     mqtt_client._aicam_config = config
+    # Frigate stream name -> camera, for the motion trigger. Empty when the
+    # snapshot URLs are not Frigate/go2rtc ones (frigate_camera_name reads the
+    # ?src= parameter), which is how this degrades to plain polling on a
+    # Blue Iris host without a config switch.
+    mqtt_client._aicam_frigate_cams = {}
+    for cam in cams:
+        frigate_name = frigate_camera_name(cam)
+        if frigate_name:
+            mqtt_client._aicam_frigate_cams[frigate_name] = cam
     # Attach discovery context so publish_discovery() (called from on_connect
     # on every reconnect) can re-assert the retained store.
     mqtt_client._aicam_discovery_ctx = {
@@ -425,8 +519,8 @@ async def main(options: argparse.Namespace) -> None:
         if count == 0:
             # scan each camera
             for cam in filter(
-                lambda cam: (datetime.now() - cam.prior_time).total_seconds()
-                > cam.interval,
+                lambda cam: cam.motion_pending
+                or (datetime.now() - cam.prior_time).total_seconds() > cam.interval,
                 cams,
             ):
                 try:

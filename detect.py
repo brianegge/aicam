@@ -11,6 +11,9 @@ import cv2
 import humanize
 from PIL import Image
 
+import alpr
+import frigate_lpr
+from alpr import ALPR_STATE_KEYS, wants_alpr
 from notify import notify
 from utils import bb_intersection_over_union, draw_bbox, draw_road
 
@@ -26,8 +29,121 @@ def add_centers(predictions):
         center["y"] = bbox["top"] + bbox["height"] / 2.0
 
 
+# Once a class has been accepted on a camera, keep accepting it at a much lower
+# confidence for a while. A stationary object's score wobbles: the car parked at
+# peach tree ranged 0.58-0.93 against a 0.70 threshold and dropped in and out of
+# the published count 156 times in one run. cam.objects already did this, but it
+# is rebuilt every frame, so it only ever bridged a single missed frame -- not
+# two consecutive dips, and not a capture error.
+OBJECT_HOLD_SECONDS = 60
+# Matched to the detector's conf floor, so a weak frame on an object we are
+# already holding actually reaches this check instead of being discarded twice.
+HOLD_PROBABILITY = 0.15
+
+
+def recently_seen(recent_objects, tag_name, now, hold_seconds=OBJECT_HOLD_SECONDS):
+    """Was this class accepted on this camera recently enough to hold it?"""
+    seen_at = recent_objects.get(tag_name)
+    if seen_at is None:
+        return False
+    return (now - seen_at).total_seconds() < hold_seconds
+
+
+def threshold_for(tag_name, thresholds, dark_thresholds, default):
+    """New-object threshold for a class, preferring the dark override.
+
+    IR floodlight glare reads as a vehicle to the detector: overnight on
+    2026-09-03 the driveway and peach tree produced 147 vehicle detections
+    topping out at 0.88, none of them real. Raising the bar only while it is
+    actually dark keeps daytime recall, where the same class legitimately
+    scores 0.85-0.95.
+    """
+    if dark_thresholds is not None:
+        override = dark_thresholds.get(tag_name)
+        if override is not None:
+            return float(override)
+    configured = thresholds.get(tag_name)
+    return float(configured) if configured is not None else default
+
+
+def apply_thresholds(
+    predictions, thresholds, dark_thresholds, default, recent_objects, now
+):
+    """Drop predictions under their class threshold, except held-over ones.
+
+    A prediction that only survives on the hysteresis hold is marked
+    `hold_only`. Such a detection may sustain an already-tracked object but
+    must never create a new one -- see track_predictions(). The hold is keyed
+    by class, so two cars parked on the peach tree camera kept `vehicle`
+    permanently fresh; without the mark, every scrap of detector noise above
+    HOLD_PROBABILITY became an unmatched new object at age=0 and notified.
+    """
+    kept = []
+    for p in predictions:
+        if p["probability"] > threshold_for(
+            p["tagName"], thresholds, dark_thresholds, default
+        ):
+            kept.append(p)
+        elif (
+            recently_seen(recent_objects, p["tagName"], now)
+            and p["probability"] > HOLD_PROBABILITY
+        ):
+            p["hold_only"] = True
+            kept.append(p)
+    return kept
+
+
+def track_predictions(valid_predictions, prev_predictions, new_predictions):
+    """Match this frame's predictions to the tracks carried from earlier ones.
+
+    Returns (tracked_pairs, unmatched_holds). A matched prediction inherits the
+    track's age and state; an unmatched one starts a new track and is appended
+    to `new_predictions` -- unless it is `hold_only`, in which case it is
+    under-threshold noise that matched nothing and is returned for the caller
+    to discard.
+    """
+    tracked_pairs = []
+    unmatched_holds = []
+    for p in valid_predictions:
+        this_box = p["boundingBox"]
+        this_name = p["tagName"]
+        prev_class = prev_predictions.setdefault(this_name, [])
+        for prev in prev_class:
+            iou = bb_intersection_over_union(prev["boundingBox"], this_box)
+            logger.debug(f"iou {this_name} = prev_box & this_box = {iou}")
+            if iou > 0.5:
+                p["iou"] = iou
+                prev["boundingBox"] = this_box  # move the box to current
+                prev["last_time"] = datetime.now()
+                prev["age"] = prev["age"] + 1
+                for t in ["age", "ignore", "priority", "priority_type"] + list(
+                    ALPR_STATE_KEYS
+                ):
+                    if t in prev:
+                        p[t] = prev[t]
+                tracked_pairs.append((p, prev))
+        if "iou" not in p:
+            if p.get("hold_only"):
+                unmatched_holds.append(p)
+                continue
+            p["start_time"] = datetime.now()
+            p["last_time"] = datetime.now()
+            p["age"] = 0
+            prev_class.append(p)
+            new_predictions.append(p)
+    return tracked_pairs, unmatched_holds
+
+
 def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     threshold = config["detector"].getfloat("threshold")
+    # Only ask Home Assistant if a dark override is actually configured.
+    dark_thresholds = None
+    if "thresholds-dark" in config:
+        try:
+            if ha.is_dark():
+                dark_thresholds = config["thresholds-dark"]
+        except Exception:
+            logger.warning("Could not read is_dark; using daytime thresholds")
     image = cam.image
     if image is None:
         return 0, 0, "{}=[err={}]".format(cam.name, cam.error)
@@ -55,14 +171,14 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         model_name += "+vehicle"
     prediction_time = timer() - prediction_start
     notify_time = 0.0
-    # filter out lower predictions
-    predictions = list(
-        filter(
-            lambda p: p["probability"]
-            > config["thresholds"].getfloat(p["tagName"], threshold)
-            or (p["tagName"] in cam.objects and p["probability"] > 0.4),
-            predictions,
-        )
+    hold_now = datetime.now()
+    predictions = apply_thresholds(
+        predictions,
+        config["thresholds"],
+        dark_thresholds,
+        threshold,
+        cam.recent_objects,
+        hold_now,
     )
     for p in predictions:
         p["camName"] = cam.name
@@ -127,6 +243,14 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     valid_objects = set(p["tagName"] for p in valid_predictions)
     departed_objects = cam.objects - valid_objects
 
+    # Routine polling deliberately fetches a small frame -- the model only
+    # consumes 608x608. Pay for the full-resolution frame only when it is
+    # actually going to be cropped: for a notification image or for ALPR.
+    # cam.full_image() caches, so the later call is free.
+    vehicles_due = [p for p in valid_predictions if wants_alpr(p)]
+    if departed_objects or vehicles_due:
+        image = cam.full_image()
+
     yyyymmdd = date.today().strftime("%Y%m%d")
     save_dir = os.path.join(config["detector"]["save-path"], yyyymmdd)
     os.makedirs(save_dir, exist_ok=True)
@@ -167,28 +291,25 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
 
     colors = config["colors"]
     new_predictions = []
-    for p in valid_predictions:
-        this_box = p["boundingBox"]
-        this_name = p["tagName"]
-        prev_class = cam.prev_predictions.setdefault(p["tagName"], [])
-        for prev in prev_class:
-            prev_box = prev["boundingBox"]
-            iou = bb_intersection_over_union(prev_box, this_box)
-            logger.debug(f"iou {cam.name}:{this_name} = prev_box & this_box = {iou}")
-            if iou > 0.5:
-                p["iou"] = iou
-                prev["boundingBox"] = this_box  # move the box to current
-                prev["last_time"] = datetime.now()
-                prev["age"] = prev["age"] + 1
-                for t in ["age", "ignore", "priority", "priority_type"]:
-                    if t in prev:
-                        p[t] = prev[t]
-        if "iou" not in p:
-            p["start_time"] = datetime.now()
-            p["last_time"] = datetime.now()
-            p["age"] = 0
-            prev_class.append(p)
-            new_predictions.append(p)
+    # (current frame prediction, tracked prediction) for everything matched to
+    # an existing track, so state notify() sets can be written back afterwards.
+    tracked_pairs, unmatched_holds = track_predictions(
+        valid_predictions, cam.prev_predictions, new_predictions
+    )
+    if unmatched_holds:
+        dropped = set(id(p) for p in unmatched_holds)
+        predictions = [p for p in predictions if id(p) not in dropped]
+        valid_predictions = [p for p in valid_predictions if id(p) not in dropped]
+    # Refresh the hold, now that we know which detections matched a track.
+    # Anything that survived here either cleared its threshold on its own or is
+    # a held detection still tracking a real object, and both should keep the
+    # low bar armed -- a car parked in poor light scored 0.17-0.53 for nine
+    # straight sweeps, and refreshing only from above-threshold detections
+    # capped the hold at OBJECT_HOLD_SECONDS, dropped the car, expired its
+    # track and made the next good frame a fresh arrival. Unmatched holds are
+    # already gone by this point, so noise cannot arm its own bar.
+    for tag_name in set(p["tagName"] for p in valid_predictions):
+        cam.recent_objects[tag_name] = hold_now
     expired = []
     for prev_tag, prev_class in cam.prev_predictions.items():
         for x in prev_class:
@@ -196,6 +317,10 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
             if x["last_time"] < datetime.now() - timedelta(minutes=expiry_minutes):
                 expired.append(x)
         prev_class[:] = [x for x in prev_class if x not in expired]
+
+    if new_predictions:
+        # Something new to report, so the notification crop wants real pixels.
+        image = cam.full_image()
 
     if len(valid_predictions) >= 0:
         if isinstance(image, Image.Image):
@@ -273,7 +398,33 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         cam.publish(f"{cam.ha_name}/show", show_count > 0, retain=False)
         cam.last_show_count = show_count
 
-    if len(new_objects):
+    # Read plates on their own cadence, before deciding whether to notify. A
+    # vehicle that parks holds a stable track and produces no new objects, so
+    # gating this on movement meant a parked vehicle -- the case where the
+    # plate is most readable -- was never looked at again.
+    new_plates = []
+    if vehicles_due:
+        try:
+            if "frigate" in config:
+                # Frigate does the recognition itself, on its own crops, so
+                # there is no image to send -- see frigate_lpr for why matching
+                # is by camera and time rather than by bounding box.
+                new_plates = frigate_lpr.read_plates(cam, vehicles_due, config)
+            else:
+                # Clean pixels, not im_pil: no reason to hand the reader an
+                # image with bounding boxes drawn over it.
+                if isinstance(image, Image.Image):
+                    alpr_image = image
+                else:
+                    alpr_image = Image.fromarray(
+                        cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                    )
+                new_plates = alpr.read_plates(cam, alpr_image, vehicles_due, config)
+        except Exception:
+            logger.exception("ALPR pass failed for %s", cam.name)
+
+    # Notify on movement, and also when a plate is read for the first time.
+    if len(new_objects) or new_plates:
         if cam.name in ["driveway", "garage"]:
             message = "%s in %s" % (",".join(valid_objects), cam.name)
         elif cam.name == "shed":
@@ -295,6 +446,13 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         priority = cam.prior_priority
     else:
         priority = -4
+
+    # Notify records a successful plate read on the current frame's prediction;
+    # persist it onto the track so the retries stop.
+    for current, tracked in tracked_pairs:
+        for key in ALPR_STATE_KEYS:
+            if key in current:
+                tracked[key] = current[key]
 
     # Notify may also mark objects as ignore
     valid_predictions = list(filter(lambda p: not ("ignore" in p), predictions))

@@ -170,8 +170,21 @@ class HomeAssistant:
             response = self.cache[entity]
         return response.get("state") == "inside"
 
+    # Darkness changes over minutes, but detect() asks once per camera per
+    # sweep -- 15 cameras every few seconds would be ~5 requests/sec at Home
+    # Assistant for a value that barely moves.
+    IS_DARK_TTL_SECONDS = 60
+
     def is_dark(self) -> bool:
-        return self.get_state("binary_sensor.is_dark")
+        now = datetime.datetime.now()
+        cached = getattr(self, "_is_dark_cached", None)
+        if cached is not None:
+            value, fetched_at = cached
+            if (now - fetched_at).total_seconds() < self.IS_DARK_TTL_SECONDS:
+                return value
+        value = self.get_state("binary_sensor.is_dark")
+        self._is_dark_cached = (value, now)
+        return value
 
     def is_time_after_midnight_and_before_six(self) -> bool:
         current_time = datetime.datetime.now().time()

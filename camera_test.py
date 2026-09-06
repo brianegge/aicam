@@ -65,6 +65,24 @@ def _response(content, status=200):
     return resp
 
 
+def test_motion_pending_starts_clear():
+    assert _make_camera().motion_pending is False
+
+
+def test_capture_consumes_motion_pending_even_while_skipping():
+    """One motion event buys one attempt, backoff or not.
+
+    If the flag survived a skipped cycle the camera would stay eligible every
+    sweep and drain self.skip far faster than backoff_cycles intended.
+    """
+    cam = _make_camera()
+    cam.skip = 2
+    cam.motion_pending = True
+    cam.capture()
+    assert cam.motion_pending is False
+    assert cam.skip == 1
+
+
 def test_default_blueiris_name_strips_cam_suffix():
     cam = _make_camera()
     assert cam.blueiris_uri.startswith("http://blueiris-3.home:81/image/test?")

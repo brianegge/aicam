@@ -135,6 +135,10 @@ class Camera:
         self.age = 0
         self.fails = 0
         self.skip = 0
+        # Set from Frigate's MQTT motion topic; makes this camera eligible for
+        # the next sweep regardless of its interval. See _handle_frigate_motion
+        # in main.py.
+        self.motion_pending = False
         self.ftp_path = config.get("ftp-path", None)
         self.interval = config.getint("interval", 30)
         self.session = None
@@ -291,6 +295,11 @@ class Camera:
         self.image = None
         self.resized = None
         self.resized2 = None
+        # Consumed here rather than after a successful fetch, and before the
+        # skip check: one motion event buys one attempt. Leaving it set during
+        # an error backoff would make this camera eligible every cycle and
+        # drain self.skip far faster than backoff_cycles intended.
+        self.motion_pending = False
         if self.skip > 0:
             self.error = "skip={}".format(self.skip)
             self.skip -= 1

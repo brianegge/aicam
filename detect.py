@@ -243,13 +243,9 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     valid_objects = set(p["tagName"] for p in valid_predictions)
     departed_objects = cam.objects - valid_objects
 
-    # Routine polling deliberately fetches a small frame -- the model only
-    # consumes 608x608. Pay for the full-resolution frame only when it is
-    # actually going to be cropped: for a notification image or for ALPR.
-    # cam.full_image() caches, so the later call is free.
+    # cam.image is already the full-resolution frame the model ran on, so the
+    # ALPR crop and the boxes drawn below describe the same instant.
     vehicles_due = [p for p in valid_predictions if wants_alpr(p)]
-    if departed_objects or vehicles_due:
-        image = cam.full_image()
 
     yyyymmdd = date.today().strftime("%Y%m%d")
     save_dir = os.path.join(config["detector"]["save-path"], yyyymmdd)
@@ -317,10 +313,6 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
             if x["last_time"] < datetime.now() - timedelta(minutes=expiry_minutes):
                 expired.append(x)
         prev_class[:] = [x for x in prev_class if x not in expired]
-
-    if new_predictions:
-        # Something new to report, so the notification crop wants real pixels.
-        image = cam.full_image()
 
     if len(valid_predictions) >= 0:
         if isinstance(image, Image.Image):

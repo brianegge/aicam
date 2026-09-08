@@ -10,17 +10,25 @@ Frigate also owns the plate-to-person mapping now, via `lpr.known_plates`
 generated from license-plates.json. A recognised plate that matches one sets
 the event's `sub_label`, which is carried through here as `plate_owner`.
 
-Matching is by camera and time, not by bounding box. aicam and Frigate detect
-independently, so their boxes will not correspond; but a plate recognised on
-the same camera within LOOKBACK_SECONDS is the same vehicle in every practical
-case, and the alternative -- geometric matching across two detectors on two
-different frames -- would be far more fragile than the thing it replaced.
+Matching is by camera, time AND position. Time alone was enough while cars
+arrived one at a time, but on 2026-09-08 two vehicles were parked in the
+driveway and the most recent plate -- the Subaru's BT70150 -- was attached to
+the Jeep, which is CT 419875. The same lookup drives
+script.house_cleaners_arrive, so a mis-attributed plate can open the garage for
+the wrong car; that is the reason this is not merely a cosmetic fix.
+
+aicam and Frigate detect independently on different frames, so their boxes will
+never agree exactly -- but both are normalised to the same frame, so overlap is
+still meaningful. Where it is ambiguous the plate is dropped rather than
+guessed: an unnamed "Vehicle" is a much cheaper failure than the wrong name.
 """
 
 import logging
 from urllib.parse import parse_qs, urlparse
 
 import requests
+
+from utils import bb_intersection_over_union
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +43,16 @@ LOOKBACK_SECONDS = 180
 MIN_PLATE_SCORE = 0.8
 
 REQUEST_TIMEOUT = 10
+
+# Minimum overlap between aicam's vehicle box and Frigate's, below which the
+# plate is not considered to belong to that vehicle. Deliberately loose: the two
+# detectors box the same car differently and on frames up to a second apart.
+MIN_PLATE_IOU = 0.25
+
+# How much better the best match must be than the runner-up before it is
+# trusted. Two cars side by side on the same camera produce similar overlaps,
+# and that is precisely the case where guessing is wrong.
+IOU_MARGIN = 0.10
 
 
 def frigate_camera_name(cam):
@@ -83,8 +101,40 @@ def fetch_recent_plates(base_url, camera, now_ts):
         if score < MIN_PLATE_SCORE:
             logger.debug("Ignoring %s on %s: score %.2f", plate, camera, score)
             continue
-        out.append((plate, event.get("sub_label"), score))
+        box = data.get("box") or []
+        # Frigate gives [x, y, w, h] normalised; aicam uses the same dict shape
+        # as its own predictions so bb_intersection_over_union can compare them.
+        region = None
+        if len(box) == 4:
+            region = {"left": box[0], "top": box[1],
+                      "width": box[2], "height": box[3]}
+        out.append((plate, event.get("sub_label"), score, region))
     return out
+
+
+def match_plate(vehicle, candidates):
+    """Which recognised plate belongs to this vehicle, if any.
+
+    Returns (plate, owner, score) or None. With a single candidate and a single
+    vehicle the old time-only behaviour is kept -- there is nothing to confuse
+    it with. Otherwise the best spatial overlap wins, and only if it is clearly
+    better than the runner-up.
+    """
+    usable = [c for c in candidates if c[3]]
+    if not usable:
+        # No boxes to compare (older Frigate, or a plate with no object box).
+        # Only safe when there is exactly one candidate.
+        return candidates[0][:3] if len(candidates) == 1 else None
+
+    scored = sorted(
+        ((bb_intersection_over_union(vehicle["boundingBox"], c[3]), c) for c in usable),
+        key=lambda x: -x[0])
+    best_iou, best = scored[0]
+    if best_iou < MIN_PLATE_IOU:
+        return None
+    if len(scored) > 1 and best_iou - scored[1][0] < IOU_MARGIN:
+        return None
+    return best[:3]
 
 
 def read_plates(cam, vehicles, config):
@@ -114,10 +164,16 @@ def read_plates(cam, vehicles, config):
             vehicle["alpr_count"] = vehicle.get("alpr_count", 0) + 1
         return []
 
-    plate, owner, score = found[0]
     new_plates = []
     for vehicle in vehicles:
         vehicle["alpr_count"] = vehicle.get("alpr_count", 0) + 1
+        matched = match_plate(vehicle, found)
+        if not matched:
+            logger.debug(
+                "No plate confidently matches a vehicle on %s (%d candidate(s)); "
+                "leaving it unnamed", cam.name, len(found))
+            continue
+        plate, owner, score = matched
         if vehicle.get("plate") == plate:
             continue
         vehicle["plate"] = plate

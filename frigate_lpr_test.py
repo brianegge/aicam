@@ -26,21 +26,26 @@ def test_camera_name_absent_when_not_a_frigate_source():
     assert frigate_lpr.frigate_camera_name(_Cam("http://bi.home:81/image/deck")) is None
 
 
-def _event(plate, score, sub_label=None):
+def _event(plate, score, sub_label=None, box=None):
     return {
         "sub_label": sub_label,
         "data": {
             "recognized_license_plate": plate,
             "recognized_license_plate_score": score,
+            # Frigate gives the tracked object's box as [x, y, w, h] normalised;
+            # it is what lets a plate be matched to the right vehicle when more
+            # than one is in view.
+            "box": box if box is not None else [0.1, 0.1, 0.2, 0.2],
         },
     }
 
 
 def test_plate_and_owner_attach_to_the_vehicle():
+    """A single candidate is unambiguous, box or no box."""
     cam = _Cam("http://frigate.home:1984/api/frame.jpeg?src=driveway")
     vehicles = [{}]
     with mock.patch.object(
-        frigate_lpr, "fetch_recent_plates", return_value=[("AT34047", "Brian", 0.95)]
+        frigate_lpr, "fetch_recent_plates", return_value=[("AT34047", "Brian", 0.95, None)]
     ):
         new = frigate_lpr.read_plates(cam, vehicles, _cfg())
     assert new == ["AT34047"]
@@ -54,7 +59,7 @@ def test_same_plate_is_not_reported_twice():
     cam = _Cam("http://frigate.home:1984/api/frame.jpeg?src=driveway")
     vehicles = [{"plate": "AT34047"}]
     with mock.patch.object(
-        frigate_lpr, "fetch_recent_plates", return_value=[("AT34047", "Brian", 0.95)]
+        frigate_lpr, "fetch_recent_plates", return_value=[("AT34047", "Brian", 0.95, None)]
     ):
         assert frigate_lpr.read_plates(cam, vehicles, _cfg()) == []
 
@@ -84,7 +89,8 @@ def test_low_confidence_reads_are_discarded():
     ]
     with mock.patch.object(frigate_lpr.requests, "get", return_value=resp):
         out = frigate_lpr.fetch_recent_plates("http://frigate.home:5000", "driveway", 0)
-    assert out == [("BW41507", "Brian", 0.97)]
+    assert out == [("BW41507", "Brian", 0.97,
+                    {"left": 0.1, "top": 0.1, "width": 0.2, "height": 0.2})]
 
 
 def test_fetch_failure_is_not_fatal():

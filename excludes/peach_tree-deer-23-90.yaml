@@ -1,0 +1,28 @@
+# False positive: aicam reports a deer on the mulch/stone at the bottom-left
+# of the peach tree view. Nothing is there -- the frame is also heavily
+# compression-artefacted in this region, which may be what the model is
+# latching onto.
+#
+# Seen repeatedly on 2026-09-09 between 18:07 and 18:24, scores 0.55-0.80,
+# tracked across ~9 sweeps (age 1-9), so it is a stable scene feature rather
+# than a one-off.
+#
+# TEMPORARY. The paired jpg is the frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only peach_tree
+# and delete this pair if it reports RETIRE.
+camera: peach tree
+label: deer
+comment: mulch bed, compression artefacts
+box:
+  left: 0.18505859
+  top: 0.85449219
+  width: 0.08007812
+  height: 0.09326172
+center:
+  x: 0.225
+  y: 0.901
+created: 2026-09-09
+score: 0.79394531
+model: packages_vehicles_yolo11s.onnx
+source_capture: 180749-peach_tree-deer_vehicle.jpg

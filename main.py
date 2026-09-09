@@ -22,6 +22,7 @@ import requests
 import sdnotify
 
 from camera import Camera, set_model_input_sizes
+from excludes import load as load_excludes
 from detect import detect
 from frigate_lpr import frigate_camera_name
 from homeassistant import HomeAssistant
@@ -401,10 +402,15 @@ async def main(options: argparse.Namespace) -> None:
         with open(detector_config["vehicle-labelfile-path"], "r") as f:
             vehicle_labels = [line.strip() for line in f.readlines()]
     # open static exclusion
-    excludes = {}
-    if "excludes-file" in detector_config:
-        with open(detector_config["excludes-file"]) as f:
-            excludes = json.load(f)
+    #
+    # Two sources: the legacy excludes.json, and excludes/ where each exclusion
+    # is a yaml paired with the frame that caused it. The pair is what makes an
+    # exclusion reviewable -- recheck_excludes.py replays those frames through
+    # the current model and says which are no longer needed.
+    excludes = load_excludes(
+        detector_config.get("excludes-file"),
+        detector_config.get("excludes-dir", "excludes"),
+    )
     # make dirs
     static_dir = os.path.join(config["detector"]["save-path"], "static")
     pathlib.Path(static_dir).mkdir(parents=True, exist_ok=True)

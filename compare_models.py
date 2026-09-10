@@ -19,6 +19,17 @@ and YOLO labels are normalised, so the ground truth is identical:
 
     ... --old-size 608x608 --old-dataset ~/train/packages-vehicles2-v11 \\
         --new-size 1088x608 --new-dataset ~/train/pv-v12-rect
+
+The ipcams animal detector is not one model but two, routed by camera.py's
+own rule (HSV hue sum == 0 -> the single-channel grey specialist, otherwise
+the colour one). Pass --old-grey to score that pair as a single *system*
+against a combined replacement, so both arms answer for the same images:
+
+    ... --old ipcams_color_yolov4.onnx --old-grey ipcams_grey_yolov4.onnx \\
+        --old-backend yolov4 --new ipcams_yolo11m.onnx
+
+ms/frame covers preprocessing as well as inference, because the routed arm's
+extra colourspace conversion is a real cost of running that arrangement.
 """
 
 import argparse
@@ -27,6 +38,7 @@ import os
 import time
 
 import cv2
+import numpy as np
 
 DEFAULT_SIZE = "608x608"
 
@@ -36,13 +48,13 @@ def parse_size(text):
     return int(width), int(height)
 
 
-def build_model(onnx_path, backend, labels, size):
+def build_model(onnx_path, backend, labels, size, channels=3):
     width, height = size
     config = {
         "onnx": onnx_path,
         "width": str(width),
         "height": str(height),
-        "channels": "3",
+        "channels": str(channels),
         "prob_threshold": "0.10",
     }
     if backend == "ultralytics":
@@ -78,7 +90,40 @@ def load_ground_truth(label_path):
     return boxes
 
 
-def evaluate(model, name, root, labels, thresholds, size):
+def single_arm(model, size):
+    """One model for every image -- camera.py's colour path."""
+
+    def predict(image):
+        return model.predict_image(
+            cv2.cvtColor(cv2.resize(image, size), cv2.COLOR_BGR2RGB)
+        )
+
+    return predict
+
+
+def routed_arm(color_model, grey_model, size, counts):
+    """Two specialists routed exactly as camera.py:resize() routes them.
+
+    The grey branch converts to single-channel *before* resizing and the
+    colour branch converts *after*; that ordering is copied from camera.py so
+    a model sees here what it sees live.
+    """
+
+    def predict(image):
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        if np.sum(hsv[:, :, 0]) == 0:
+            counts["grey"] += 1
+            grey = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            return grey_model.predict_image(cv2.resize(grey, size))
+        counts["colour"] += 1
+        return color_model.predict_image(
+            cv2.cvtColor(cv2.resize(image, size), cv2.COLOR_BGR2RGB)
+        )
+
+    return predict
+
+
+def evaluate(predict, name, root, labels, thresholds):
     tp = dict((c, 0) for c in labels)
     fp = dict((c, 0) for c in labels)
     fn = dict((c, 0) for c in labels)
@@ -89,10 +134,8 @@ def evaluate(model, name, root, labels, thresholds, size):
         image = cv2.imread(image_path)
         if image is None:
             continue
-        # exactly what camera.py hands a model: squashed to the model size, RGB
-        resized = cv2.cvtColor(cv2.resize(image, size), cv2.COLOR_BGR2RGB)
         started = time.perf_counter()
-        predictions = model.predict_image(resized)
+        predictions = predict(image)
         total_ms += (time.perf_counter() - started) * 1000
         count += 1
 
@@ -148,6 +191,10 @@ def main():
     parser.add_argument("--old-backend", default="yolov4")
     parser.add_argument("--old-size", default=DEFAULT_SIZE, help="WxH input geometry")
     parser.add_argument("--old-dataset", help="overrides --dataset for this model")
+    parser.add_argument(
+        "--old-grey",
+        help="single-channel grey specialist; makes the old arm a routed pair",
+    )
     parser.add_argument("--new", required=True)
     parser.add_argument("--new-backend", default="ultralytics")
     parser.add_argument("--new-size", default=DEFAULT_SIZE, help="WxH input geometry")
@@ -178,8 +225,22 @@ def main():
         ("NEW", args.new, args.new_backend, new_size, args.new_dataset),
     ):
         root = split_root(dataset)
-        name = "%s %s (%dx%d) %s" % (tag, onnx, size[0], size[1], root)
-        evaluate(build_model(onnx, backend, labels, size), name, root, labels, thresholds, size)
+        counts = {"colour": 0, "grey": 0}
+        if tag == "OLD" and args.old_grey:
+            arm = routed_arm(
+                build_model(onnx, backend, labels, size, channels=3),
+                build_model(args.old_grey, backend, labels, size, channels=1),
+                size,
+                counts,
+            )
+            name = "%s %s + %s routed (%dx%d) %s" % (
+                tag, onnx, args.old_grey, size[0], size[1], root)
+        else:
+            arm = single_arm(build_model(onnx, backend, labels, size), size)
+            name = "%s %s (%dx%d) %s" % (tag, onnx, size[0], size[1], root)
+        evaluate(arm, name, root, labels, thresholds)
+        if counts["colour"] or counts["grey"]:
+            print("routing: %d colour, %d grey" % (counts["colour"], counts["grey"]))
 
 
 if __name__ == "__main__":

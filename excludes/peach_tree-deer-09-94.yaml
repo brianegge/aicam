@@ -1,0 +1,28 @@
+# False positive: a second rock in the same bottom-left mulch bed as
+# peach_tree-deer-23-90, about 13% of the frame further left. Confirmed static
+# -- the 06:19:37 / 06:19:50 / 06:20:06 / 06:20:30 frames are pixel-for-pixel
+# the same shapes in the same places, so nothing walked in or out.
+#
+# It sits outside the 23-90 box (IoU 0), which is why that exclusion did not
+# cover it and this fired a real "deer near peach tree" alert on 2026-09-10
+# at 06:19:50, tracked 13 times over 7 minutes before departing.
+#
+# TEMPORARY. The paired jpg is the frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only peach_tree
+# and delete this pair if it reports RETIRE.
+camera: peach tree
+label: deer
+comment: mulch bed rock, compression artefacts
+box:
+  left: 0.05996704
+  top: 0.89501953
+  width: 0.06832886
+  height: 0.09228516
+center:
+  x: 0.094
+  y: 0.941
+created: 2026-09-10
+score: 0.91015625
+model: packages_vehicles_yolo11s.onnx
+source_capture: 061950-peach_tree-deer.jpg

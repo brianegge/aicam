@@ -24,5 +24,5 @@ center:
   y: 0.901
 created: 2026-09-09
 score: 0.79394531
-model: packages_vehicles_yolo11s.onnx
+model: ipcams_color_yolov4.onnx / ipcams_grey_yolov4.onnx  # deer is an ipcams class, not a vehicle-model one
 source_capture: 180749-peach_tree-deer_vehicle.jpg

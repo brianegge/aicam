@@ -88,19 +88,33 @@ def upload_image(api_key, project_id, name, image_bytes, split="train", tags=Non
         return None
 
 
-def annotate_null(api_key, project_id, image_id, name):
-    """Attach an empty YOLO annotation, which is what makes it a negative.
+NULL_VOC = ("<annotation><folder></folder><filename>%s.jpg</filename>"
+            "<size><width>%d</width><height>%d</height><depth>3</depth></size>"
+            "<segmented>0</segmented></annotation>")
 
-    Uploading alone is not enough. An image with no annotation sits in
-    Roboflow's unannotated bucket and teaches the model nothing; an image
-    annotated with zero boxes is a background example and actively suppresses
-    whatever the detector thought it saw there.
+
+def annotate_null(api_key, project_id, image_id, name, width, height):
+    """Mark an uploaded image as a background example.
+
+    Uploading alone is not enough: an image with no annotation record is a
+    pending chore, while one annotated with zero boxes is training data that
+    actively suppresses whatever the detector thought it saw.
+
+    The annotation is Pascal VOC with no <object> elements. The obvious
+    encoding -- an empty YOLO .txt, which is exactly how a background image is
+    represented on disk -- is rejected by the upload API with
+    InvalidAnnotationFormat, as are an empty body, a bare newline and an empty
+    CreateML array. VOC is the one format that expresses "this image, no
+    objects" in a way the parser accepts. Verified against the live API on
+    2026-09-13; the result reads back as {"count": 0, "classes": {}}, the same
+    shape as an image marked null by hand in the web UI.
     """
     url = "https://api.roboflow.com/dataset/%s/annotate/%s?%s" % (
         project_id, image_id,
-        urlencode({"api_key": api_key, "name": name + ".txt"}))
-    req = Request(url, data=b"", method="POST")
-    req.add_header("Content-Type", "text/plain")
+        urlencode({"api_key": api_key, "name": name + ".xml"}))
+    body = (NULL_VOC % (name, width, height)).encode("utf-8")
+    req = Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "text/xml")
     return urlopen(req, timeout=30).read().decode("utf-8")
 
 

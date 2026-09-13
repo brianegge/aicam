@@ -26,6 +26,14 @@ def config(tmp_path, **over):
     return c
 
 
+def jpeg_bytes(w=2688, h=1520):
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
 def pred(tag="deer", ignore="verified: nothing", left=0.5, top=0.4, w=0.05, h=0.06):
     p = {"tagName": tag,
          "boundingBox": {"left": left, "top": top, "width": w, "height": h},
@@ -79,7 +87,7 @@ def uploads():
 
 def run(tmp_path, preds, cam="peach tree", cfg=None):
     return autolabel.maybe_upload_negative(
-        cam, b"jpeg-bytes", preds, cfg or config(tmp_path))
+        cam, jpeg_bytes(), preds, cfg or config(tmp_path))
 
 
 def test_it_uploads_and_then_annotates_as_null(tmp_path, uploads):
@@ -89,6 +97,8 @@ def test_it_uploads_and_then_annotates_as_null(tmp_path, uploads):
     # Uploading without annotating leaves it in the unannotated bucket, doing
     # nothing -- which is the state the 2222 flagged images are already in.
     assert ann.call_args[0][2] == "img123"
+    # Real frame dimensions: Roboflow rejects an annotation it cannot parse.
+    assert ann.call_args[0][4:6] == (2688, 1520)
 
 
 def test_the_name_carries_the_camera_and_class(tmp_path, uploads):
@@ -188,3 +198,45 @@ def test_a_free_text_exclusion_comment_is_trainable():
 def test_a_comment_that_merely_mentions_a_road_still_counts():
     """Matched exactly, so only detect.py's literal 'road' is excluded."""
     assert autolabel.is_negative([pred("deer", "stone at the road edge")])
+
+
+# --- the annotation format the API actually accepts --------------------------
+
+def test_the_null_annotation_is_voc_with_no_objects():
+    """An empty YOLO .txt is how a background image looks on disk, and the
+    upload API rejects it with InvalidAnnotationFormat -- as it does an empty
+    body, a bare newline and an empty CreateML array. Only VOC parses.
+    """
+    import re
+    import roboflow_upload
+    xml = roboflow_upload.NULL_VOC % ("peach_tree-deer-abc123", 2688, 1520)
+    assert "<object>" not in xml
+    assert "<width>2688</width>" in xml and "<height>1520</height>" in xml
+    # Well-formed, or Roboflow will not parse it either.
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(xml)
+    assert root.tag == "annotation"
+    assert root.find("size/width").text == "2688"
+    assert root.findall("object") == []
+
+
+def test_the_annotation_is_sent_as_xml_not_text():
+    """The name suffix and content type both decide how Roboflow parses it."""
+    import roboflow_upload
+    seen = {}
+
+    class FakeResp:
+        def read(self):
+            return b'{"success":true}'
+
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["ctype"] = req.get_header("Content-type")
+        seen["body"] = req.data
+        return FakeResp()
+
+    with mock.patch.object(roboflow_upload, "urlopen", fake_urlopen):
+        roboflow_upload.annotate_null("k", "ipcams2", "img1", "stem", 100, 50)
+    assert "name=stem.xml" in seen["url"]
+    assert seen["ctype"] == "text/xml"
+    assert b"<object>" not in seen["body"]

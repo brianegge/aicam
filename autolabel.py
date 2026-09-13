@@ -35,9 +35,12 @@ a static object is all the model needs; a hundred is harmful.
 """
 import datetime
 import hashlib
+import io
 import json
 import logging
 import os
+
+from PIL import Image
 
 import roboflow_upload
 from utils import bb_intersection_over_union
@@ -138,6 +141,14 @@ def maybe_upload_negative(cam, image_bytes, predictions, config):
     if not projects:
         return None
 
+    # The VOC annotation carries the frame's real dimensions; Roboflow rejects
+    # the annotation outright if it cannot be parsed.
+    try:
+        width, height = Image.open(io.BytesIO(image_bytes)).size
+    except Exception:
+        logger.exception("%s: could not read frame dimensions", cam)
+        return None
+
     uploaded = []
     for project_id in projects:
         try:
@@ -148,7 +159,7 @@ def maybe_upload_negative(cam, image_bytes, predictions, config):
                 logger.warning("%s: upload to %s returned no id", cam, project_id)
                 continue
             roboflow_upload.annotate_null(
-                section["api-key"], project_id, image_id, name)
+                section["api-key"], project_id, image_id, name, width, height)
             uploaded.append(project_id)
         except Exception:
             logger.exception("%s: negative upload to %s failed", cam, project_id)

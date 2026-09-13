@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("cv2")
 
-from detect import threshold_for
+from detect import label_with_confidence, threshold_for
 
 DEFAULT = 0.7
 
@@ -200,3 +200,41 @@ def test_over_threshold_detection_matching_nothing_is_a_real_arrival():
     assert new_predictions == [arrival]
     assert arrival["age"] == 0
     assert len(prev["vehicle"]) == 2
+
+
+# --- confidence in the alert text ---------------------------------------
+
+def _p(tag, prob):
+    return {"tagName": tag, "probability": prob}
+
+
+def test_the_alert_carries_the_score_that_triggered_it():
+    """The swing false positive acquired at 0.510 against a 0.45 threshold."""
+    assert label_with_confidence(
+        {"deer"}, [_p("deer", 0.510)]) == "deer 51%"
+
+
+def test_the_highest_score_per_class_is_the_one_reported():
+    """Several boxes of one class; the alert fired on the best of them."""
+    out = label_with_confidence(
+        {"deer"}, [_p("deer", 0.31), _p("deer", 0.76), _p("deer", 0.52)])
+    assert out == "deer 76%"
+
+
+def test_several_classes_are_listed_in_a_stable_order():
+    out = label_with_confidence(
+        {"deer", "dog"}, [_p("dog", 0.93), _p("deer", 0.51)])
+    assert out == "deer 51%,dog 93%"
+
+
+def test_predictions_for_other_classes_are_ignored():
+    out = label_with_confidence(
+        {"deer"}, [_p("deer", 0.51), _p("vehicle", 0.99)])
+    assert out == "deer 51%"
+
+
+def test_a_class_with_no_matching_prediction_still_appears():
+    """Never drop an object from the message just because the score is missing."""
+    assert label_with_confidence({"deer"}, []) == "deer"
+    assert label_with_confidence(
+        {"deer"}, [{"tagName": "deer"}]) == "deer 0%"

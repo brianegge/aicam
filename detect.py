@@ -49,6 +49,32 @@ def recently_seen(recent_objects, tag_name, now, hold_seconds=OBJECT_HOLD_SECOND
     return (now - seen_at).total_seconds() < hold_seconds
 
 
+def label_with_confidence(tag_names, predictions):
+    """"deer 51%,dog 93%" -- the score that actually triggered the alert.
+
+    A notification that only says "deer near swing" gives the reader no way to
+    judge it. The swing false positive of 2026-09-11 18:11 acquired at 0.510
+    against a 0.45 threshold; seeing "deer 51%" on the phone says immediately
+    that this was a marginal call, where "deer 93%" does not.
+
+    Highest score per class, because that is the one that cleared the bar.
+    """
+    best = {}
+    for p in predictions:
+        tag = p.get("tagName")
+        if tag in tag_names:
+            score = p.get("probability") or 0
+            if score > best.get(tag, -1):
+                best[tag] = score
+    out = []
+    for tag in sorted(tag_names):
+        if tag in best:
+            out.append("%s %.0f%%" % (tag, best[tag] * 100))
+        else:
+            out.append(tag)
+    return ",".join(out)
+
+
 def threshold_for(tag_name, thresholds, dark_thresholds, default):
     """New-object threshold for a class, preferring the dark override.
 
@@ -417,16 +443,17 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
 
     # Notify on movement, and also when a plate is read for the first time.
     if len(new_objects) or new_plates:
+        seen = label_with_confidence(valid_objects, valid_predictions)
         if cam.name in ["driveway", "garage"]:
-            message = "%s in %s" % (",".join(valid_objects), cam.name)
+            message = "%s in %s" % (seen, cam.name)
         elif cam.name == "shed":
-            message = "%s in front of garage" % ",".join(valid_objects)
+            message = "%s in front of garage" % seen
         elif cam.name == "garage-r":
-            message = "%s in front of left garage" % ",".join(valid_objects)
+            message = "%s in front of left garage" % seen
         elif cam.name == "garage-l":
-            message = "%s in front of right garage" % ",".join(valid_objects)
+            message = "%s in front of right garage" % seen
         else:
-            message = "%s near %s" % (",".join(valid_objects), cam.name)
+            message = "%s near %s" % (seen, cam.name)
         if cam.age > 2 or "once" in config["detector"]:
             notify_start = timer()
             priority = notify(cam, message, im_pil, valid_predictions, config, ha, model_name=model_name, original_image=image)

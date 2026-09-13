@@ -9,6 +9,7 @@ import time
 from unittest import mock
 
 import numpy as np
+import requests
 import pytest
 from PIL import Image
 
@@ -289,3 +290,105 @@ def test_a_positive_identification_at_the_same_confidence_does_suppress():
     p = pred("fox", score=0.7)
     run([p], return_value=verdict("squirrel", confidence=0.85))
     assert p["ignore"] == "verified: squirrel"
+
+
+# --- saying why, when it could not verify ------------------------------------
+
+class FakeResponse:
+    def __init__(self, status): self.status_code = status
+
+
+def http_error(status):
+    e = requests.HTTPError("%d" % status)
+    e.response = FakeResponse(status)
+    return e
+
+
+def test_running_out_of_credit_is_named_on_the_alert():
+    """The 2026-09-13 outage read as ordinary 3am wildlife alerts."""
+    p = pred("raccoon")
+    run([p], side_effect=http_error(402))
+    assert "ignore" not in p
+    assert verify.unverified_note([p]) == " (unverified: no OpenRouter credit)"
+
+
+def test_a_rejected_key_is_named():
+    p = pred("fox")
+    run([p], side_effect=http_error(401))
+    assert p["unverified"] == "OpenRouter rejected the key"
+
+
+def test_a_timeout_is_named():
+    p = pred("fox")
+    run([p], side_effect=requests.Timeout("too slow"))
+    assert p["unverified"] == "model timed out"
+
+
+def test_an_unusable_verdict_is_named():
+    p = pred("fox")
+    run([p], return_value={"label": "chupacabra", "confidence": 1.0})
+    assert p["unverified"] == "model gave no usable answer"
+
+
+def test_an_unexpected_error_still_produces_a_note():
+    p = pred("fox")
+    run([p], side_effect=RuntimeError("something odd"))
+    assert p["unverified"] == "verification failed"
+
+
+def test_a_successful_verdict_leaves_no_note():
+    p = pred("fox")
+    run([p], return_value=verdict("fox"))
+    assert verify.unverified_note([p]) == ""
+
+
+def test_the_note_does_not_repeat_one_reason_per_detection():
+    a, b = pred("fox"), pred("deer", left=0.1)
+    run([a, b], side_effect=http_error(402))
+    assert verify.unverified_note([a, b]) == " (unverified: no OpenRouter credit)"
+
+
+def test_distinct_reasons_are_both_reported():
+    a, b = pred("fox"), pred("deer", left=0.1)
+    a["unverified"] = "model timed out"
+    b["unverified"] = "no OpenRouter credit"
+    assert verify.unverified_note([a, b]) == (
+        " (unverified: model timed out, no OpenRouter credit)")
+
+
+# --- the breaker -------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def reset_breaker():
+    verify._breaker.update(until=0.0, reason="")
+    yield
+    verify._breaker.update(until=0.0, reason="")
+
+
+def test_a_dead_key_is_only_discovered_once():
+    """Twenty-two round trips to be told the same thing, one per detection."""
+    cam = FakeCam()
+    with mock.patch.object(verify, "ask", side_effect=http_error(402)) as asked:
+        for i in range(6):
+            p = pred("fox", left=0.1 * i)
+            verify.verify_predictions(cam, frame(), [p], config())
+            assert p["unverified"] == "no OpenRouter credit"
+    assert asked.call_count == 1
+
+
+def test_a_timeout_does_not_open_the_breaker():
+    """One slow call says nothing about the next."""
+    cam = FakeCam()
+    with mock.patch.object(verify, "ask", side_effect=requests.Timeout()) as asked:
+        for i in range(3):
+            verify.verify_predictions(cam, frame(), [pred("fox", left=0.1 * i)], config())
+    assert asked.call_count == 3
+
+
+def test_the_breaker_reopens_after_its_window():
+    cam = FakeCam()
+    with mock.patch.object(verify, "ask", side_effect=http_error(402)) as asked:
+        verify.verify_predictions(cam, frame(), [pred("fox")], config())
+        verify._breaker["until"] = 0.0          # window elapsed
+        verify.verify_predictions(cam, frame(), [pred("fox", left=0.3)], config())
+    assert asked.call_count == 2

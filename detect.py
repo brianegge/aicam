@@ -452,16 +452,19 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     # Notify on movement, and also when a plate is read for the first time.
     if len(new_objects) or new_plates:
         seen = label_with_confidence(valid_objects, valid_predictions)
+        # Say when the second opinion could not be had. A gate that fails open
+        # silently reads exactly like a gate that passed the detection.
+        unverified = verify.unverified_note(valid_predictions)
         if cam.name in ["driveway", "garage"]:
-            message = "%s in %s" % (seen, cam.name)
+            message = "%s in %s" % (seen, cam.name) + unverified
         elif cam.name == "shed":
-            message = "%s in front of garage" % seen
+            message = "%s in front of garage" % seen + unverified
         elif cam.name == "garage-r":
-            message = "%s in front of left garage" % seen
+            message = "%s in front of left garage" % seen + unverified
         elif cam.name == "garage-l":
-            message = "%s in front of right garage" % seen
+            message = "%s in front of right garage" % seen + unverified
         else:
-            message = "%s near %s" % (seen, cam.name)
+            message = "%s near %s" % (seen, cam.name) + unverified
         if cam.age > 2 or "once" in config["detector"]:
             notify_start = timer()
             priority = notify(cam, message, im_pil, valid_predictions, config, ha, model_name=model_name, original_image=image)

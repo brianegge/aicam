@@ -53,11 +53,22 @@ looking again, it may well be right. Being wrong in that direction is what the
 excludes/ files risk and this gate does not: the gate re-decides every arrival,
 where an exclusion is permanent until someone deletes it.
 
-Failing open
-------------
+Failing open, and saying so
+---------------------------
 Every failure path keeps the alert. A missed coyote costs more than a
 duplicate notification, so a timeout, a bad key, an unparseable reply or a
 model that is merely unsure all fall through to notifying.
+
+The alert then says why, because a silent fallback is indistinguishable from
+a working gate. On 2026-09-13 the account ran out of credit at about 01:00 and
+the only symptom was wildlife alerts resuming -- twenty-two failed calls, each
+one a 3am notification that looked exactly like a verified one. Now it reads
+"raccoon 54% near peach tree (unverified: no OpenRouter credit)".
+
+A key that is out of credit or rejected stays that way, so the first such
+answer opens a breaker and later detections skip the call for
+retry-after-minutes rather than paying a round trip per detection to learn
+the same thing.
 """
 import base64
 import io
@@ -92,12 +103,49 @@ PROMPT = (
     "that is none of the listed ones."
 )
 
+# Set while the key is known bad, so we stop paying a round trip per detection
+# to be told the same thing. Cleared by time alone: topping the account up is
+# invisible from here.
+_breaker = {"until": 0.0, "reason": ""}
+
 # {camera: [(tag, box, label, expires_at, hits)]}. Only suppressions are
 # cached: a static false positive re-acquires every few minutes once its track
 # expires, and re-billing seventeen times a night for the same stone is the
 # whole cost of the feature. Confirmations are not cached, because a real
 # animal moves and the next frame is a genuinely different question.
 _suppressed = {}
+
+
+def _failure_reason(exc):
+    """Short cause, phrased for the notification rather than the log."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 402:
+        return "no OpenRouter credit"
+    if status in (401, 403):
+        return "OpenRouter rejected the key"
+    if status == 429:
+        return "rate limited"
+    if status:
+        return "OpenRouter HTTP %d" % status
+    if isinstance(exc, requests.Timeout):
+        return "model timed out"
+    if isinstance(exc, requests.RequestException):
+        return "model unreachable"
+    return "verification failed"
+
+
+# Causes a retry cannot fix, so they arm the breaker.
+FATAL = ("no OpenRouter credit", "OpenRouter rejected the key")
+
+
+def unverified_note(predictions):
+    """" (unverified: ...)" for the alert text, or "" when all was well."""
+    reasons = []
+    for p in predictions:
+        r = p.get("unverified")
+        if r and r not in reasons:
+            reasons.append(r)
+    return " (unverified: %s)" % ", ".join(reasons) if reasons else ""
 
 
 def _cfg(config):
@@ -243,16 +291,35 @@ def verify_predictions(cam, image, predictions, config):
                     hit["label"], hit["hits"])
             continue
 
+        if now < _breaker["until"]:
+            p["unverified"] = _breaker["reason"]
+            continue
+
         try:
             jpeg = _crop(image, p["boundingBox"],
                          cfg.getfloat("context", 3.0), cfg.getint("max-edge", 768),
                          cfg.getint("min-window", 400))
             got = ask(jpeg, p["tagName"], cfg)
-        except Exception:
-            logger.exception("%s: verification of %s failed, alerting anyway",
-                             cam.name, p["tagName"])
+        except Exception as e:
+            reason = _failure_reason(e)
+            p["unverified"] = reason
+            if reason in FATAL:
+                _breaker.update(until=now + cfg.getfloat("retry-after-minutes", 15) * 60,
+                                reason=reason)
+                logger.error("%s: %s -- not asking again for %s minutes; "
+                             "alerts will say so", cam.name, reason,
+                             cfg.get("retry-after-minutes", "15"))
+            elif isinstance(e, requests.RequestException):
+                # Expected and self-describing; a stack trace per detection
+                # buried the 402s last night.
+                logger.warning("%s: verification of %s failed (%s), alerting anyway",
+                               cam.name, p["tagName"], reason)
+            else:
+                logger.exception("%s: verification of %s failed, alerting anyway",
+                                 cam.name, p["tagName"])
             continue
         if not got or got.get("label") not in LABELS:
+            p["unverified"] = "model gave no usable answer"
             logger.warning("%s: unusable verdict for %s (%s), alerting anyway",
                            cam.name, p["tagName"], got)
             continue

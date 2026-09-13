@@ -13,6 +13,7 @@ from PIL import Image
 
 import alpr
 import frigate_lpr
+import verify
 from alpr import ALPR_STATE_KEYS, wants_alpr
 from notify import notify
 from utils import bb_intersection_over_union, draw_bbox, draw_road
@@ -264,6 +265,13 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
                 if iou > 0.5:
                     p["ignore"] = e.get("comment", "static iou {}".format(iou))
                     break
+
+    # A second opinion on fresh wildlife detections, from a vision model that
+    # gets the original pixels rather than the 608x608 stretch the detector
+    # judged. Placed with the exclusions, and setting the same "ignore" key, so
+    # a suppressed detection is invisible to everything downstream instead of
+    # being special-cased at the notify call.
+    verify.verify_predictions(cam, image, predictions, config)
 
     valid_predictions = list(filter(lambda p: not ("ignore" in p), predictions))
     valid_objects = set(p["tagName"] for p in valid_predictions)

@@ -18,12 +18,20 @@
 # free; on the night of 2026-09-12 this one spot alone cost about 18 model
 # calls at $0.0026, and the model contradicted itself across them.
 #
+# label is "*", not one class. excludes.py keys on the label, so a single-class
+# entry only covers the name the detector happened to use that day, and these
+# objects do not hold still in that sense: over the archive this box has been
+# called rabbit 44, raccoon 42, fox 10. At 03:45 on 2026-09-13 the stake at 0.831,0.551 was excluded
+# as a rabbit and alerted as a raccoon from the same pixels. A rock is not a
+# raccoon and it is not a fox either, so the exclusion belongs to the geometry
+# and not to a name.
+#
 # TEMPORARY. The paired jpg is a frame that produced it -- after the next
 # ipcams retrain run:
 #     python3 recheck_excludes.py --config config.txt --only peach_tree
 # and delete this pair if it reports RETIRE.
 camera: peach tree
-label: rabbit
+label: "*"
 comment: small stake or marker in the lawn
 box:
   left: 0.83032407

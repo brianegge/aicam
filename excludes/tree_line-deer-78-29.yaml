@@ -6,12 +6,20 @@
 # yolov4 pair and the yolo11m model, which is what marks it as scenery rather
 # than a model artefact.
 #
+# label is "*", not one class. excludes.py keys on the label, so a single-class
+# entry only covers the name the detector happened to use that day, and these
+# objects do not hold still in that sense: over the archive this box has been
+# called deer 7, fox 1. At 03:45 on 2026-09-13 the stake at 0.831,0.551 was excluded
+# as a rabbit and alerted as a raccoon from the same pixels. A rock is not a
+# raccoon and it is not a fox either, so the exclusion belongs to the geometry
+# and not to a name.
+#
 # TEMPORARY. The paired jpg is a frame that produced it -- after the next
 # ipcams retrain run:
 #     python3 recheck_excludes.py --config config.txt --only tree_line
 # and delete this pair if it reports RETIRE.
 camera: tree line
-label: deer
+label: "*"
 comment: leaf litter and a fallen branch on the slope; 9 hits over 3 days, 0.61-0.97
 box:
   left: 0.75927734

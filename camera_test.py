@@ -11,6 +11,9 @@ import pytest
 cv2 = pytest.importorskip("cv2")
 np = pytest.importorskip("numpy")
 
+import cv2
+import numpy as np
+
 import camera as camera_mod
 from camera import Camera
 
@@ -299,12 +302,18 @@ def test_resize_feeds_each_model_its_own_geometry():
     assert cam.resized2.shape == (608, 1088, 3)
 
 
-def test_resize_grey_path_feeds_each_model_its_own_geometry():
+def test_resize_feeds_each_model_its_own_geometry_on_an_ir_frame():
+    """Was the grey-path test: an IR frame used to become single-channel.
+
+    Since the specialists were consolidated into one combined model the frame
+    stays three-channel whatever its hue, and only the geometry differs per
+    model.
+    """
     cam = _make_camera()
     cam.image = np.zeros((720, 1280, 3), dtype=np.uint8)  # hue sum 0 -> IR frame
     with _set_sizes((608, 608), (1088, 608)):
         cam.resize()
-    assert cam.resized.shape == (608, 608)  # greyscale, no channel axis
+    assert cam.resized.shape == (608, 608, 3)
     assert cam.resized2.shape == (608, 1088, 3)
 
 
@@ -492,3 +501,28 @@ def test_connection_failure_still_trips_the_host_breaker():
         for _ in range(camera_mod.BI_BREAKER_FAILURES):
             cam._capture_blueiris()
     assert camera_mod._breaker_until.get("frigate.home:1984", 0) > 0
+
+
+def test_resize_always_produces_three_channels():
+    """The grey specialist is gone; a single-channel frame would break detect().
+
+    detect() routes on cam.resized.shape, so a 2-dim array would take the old
+    grey branch. It must never be produced again.
+    """
+    cam = _make_camera()
+    for colour in ((200, 40, 40), (40, 40, 200), (0, 0, 0), (128, 128, 128)):
+        cam.image = np.full((480, 640, 3), colour, dtype=np.uint8)
+        cam.resize()
+        assert cam.resized.ndim == 3, colour
+        assert cam.resized.shape[2] == 3, colour
+
+
+def test_resize_handles_a_genuinely_greyscale_frame():
+    """An IR frame has hue sum 0 -- the old trigger for the grey path."""
+    cam = _make_camera()
+    grey = np.full((480, 640, 3), 90, dtype=np.uint8)
+    hsv = cv2.cvtColor(grey, cv2.COLOR_BGR2HSV)
+    assert hsv[:, :, 0].sum() == 0, "fixture is not hue-neutral"
+    cam.image = grey
+    cam.resize()
+    assert cam.resized.ndim == 3 and cam.resized.shape[2] == 3

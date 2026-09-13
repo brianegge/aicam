@@ -471,22 +471,31 @@ class Camera:
             logger.exception("Failed to reboot %s", self.name)
 
     def resize(self):
+        """Prepare the model inputs. Always three channels.
+
+        There used to be a second, single-channel path here: when the HSV hue
+        sum was exactly 0 the frame was converted to greyscale and handed to a
+        separate grey specialist. That split was removed on 2026-09-11 when the
+        two yolov4 specialists were replaced by one combined yolo11m model.
+
+        Scoring the arrangement in September 2026 found the split earned
+        nothing -- identical F1 either way -- while giving each specialist a
+        permanent blind spot, because the two domains hold different animals.
+        The colour model trained on *zero* rabbits and two coyotes, so it could
+        not detect a daytime rabbit by construction, and the test split hid
+        that because it contained no daylight rabbits either.
+
+        The combined model trains on IR frames as three-channel images, which
+        is what a greyscale scene already is once decoded, so nothing needs
+        converting.
+        """
         if self.image is None:
             return
-        hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
-        sum = np.sum(hsv[:, :, 0])
-        if sum == 0:
-            self.resized2 = cv2.resize(
-                cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB), VEHICLE_INPUT_SIZE
-            )
-            self.image = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
-            self.resized = cv2.resize(self.image, IPCAMS_INPUT_SIZE)
+        resized = cv2.resize(self.image, IPCAMS_INPUT_SIZE)
+        self.resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        if VEHICLE_INPUT_SIZE == IPCAMS_INPUT_SIZE:
+            self.resized2 = self.resized
         else:
-            resized = cv2.resize(self.image, IPCAMS_INPUT_SIZE)
-            self.resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-            if VEHICLE_INPUT_SIZE == IPCAMS_INPUT_SIZE:
-                self.resized2 = self.resized
-            else:
-                self.resized2 = cv2.cvtColor(
-                    cv2.resize(self.image, VEHICLE_INPUT_SIZE), cv2.COLOR_BGR2RGB
-                )
+            self.resized2 = cv2.cvtColor(
+                cv2.resize(self.image, VEHICLE_INPUT_SIZE), cv2.COLOR_BGR2RGB
+            )

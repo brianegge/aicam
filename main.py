@@ -373,7 +373,12 @@ async def main(options: argparse.Namespace) -> None:
     ha: HomeAssistant = HomeAssistant(config["homeassistant"])
     detector_config: Dict[str, str] = config["detector"]
     color_model_config: Dict[str, str] = config["color-model"]
-    grey_model_config: Dict[str, str] = config["grey-model"]
+    # Optional since 2026-09-11. One combined model replaced the colour/grey
+    # specialists, and camera.py no longer produces a single-channel frame, so
+    # the grey branch in detect() is unreachable. A config that still defines
+    # [grey-model] keeps working; one that omits it reuses the colour model
+    # rather than loading 80 MB of ONNX that can never be called.
+    grey_model_config = config["grey-model"] if config.has_section("grey-model") else None
     mqtt_icons: Dict[str, str] = config["mqtt_icons"]
     lwt: str = "aicam/status"
     mqtt_client: paho.Client = paho.Client(client_id="aicam")
@@ -418,8 +423,11 @@ async def main(options: argparse.Namespace) -> None:
     sd = sdnotify.SystemdNotifier()
     sd.notify("STATUS=Loading color model")
     color_model = load_model(color_model_config, labels, options.trt)
-    sd.notify("STATUS=Loading grey model")
-    grey_model = load_model(grey_model_config, labels, options.trt)
+    if grey_model_config is None:
+        grey_model = color_model
+    else:
+        sd.notify("STATUS=Loading grey model")
+        grey_model = load_model(grey_model_config, labels, options.trt)
     sd.notify("STATUS=Loading vehicle/packages model")
     vehicle_model = load_model(config["vehicle-model"], vehicle_labels, options.trt)
     set_model_input_sizes(color_model, vehicle_model)

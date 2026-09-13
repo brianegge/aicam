@@ -1,0 +1,27 @@
+# False positive: shadow and brush at the treeline edge, cut by the frame; 2 hits over 2 days.
+#
+# A static scene feature, not a confidence problem. Raising the deer threshold
+# cannot reach these -- this one peaked at 0.68, and the tree_line pair reach
+# 0.96. Recurs at the same coordinates on 2 separate days and under BOTH the
+# yolov4 pair and the yolo11m model, which is what marks it as scenery rather
+# than a model artefact.
+#
+# TEMPORARY. The paired jpg is a frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only garage-l
+# and delete this pair if it reports RETIRE.
+camera: garage-l
+label: deer
+comment: shadow and brush at the treeline edge, cut by the frame; 2 hits over 2 days
+box:
+  left: 0.00804650
+  top: 0.14180125
+  width: 0.03166290
+  height: 0.05599426
+center:
+  x: 0.024
+  y: 0.170
+created: 2026-09-11
+score: 0.67700
+model: ipcams_v32_yolo11m_608.onnx / ipcams_color_yolov4.onnx (both)
+source_capture: 170751-garage-l-deer_dog.jpg

@@ -1,0 +1,27 @@
+# False positive: same slope, further right; 4 hits over 2 days, 0.91-0.96.
+#
+# A static scene feature, not a confidence problem. Raising the deer threshold
+# cannot reach these -- this one peaked at 0.96, and the tree_line pair reach
+# 0.96. Recurs at the same coordinates on 2 separate days and under BOTH the
+# yolov4 pair and the yolo11m model, which is what marks it as scenery rather
+# than a model artefact.
+#
+# TEMPORARY. The paired jpg is a frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only tree_line
+# and delete this pair if it reports RETIRE.
+camera: tree line
+label: deer
+comment: same slope, further right; 4 hits over 2 days, 0.91-0.96
+box:
+  left: 0.85009766
+  top: 0.27807617
+  width: 0.04931641
+  height: 0.09692383
+center:
+  x: 0.875
+  y: 0.327
+created: 2026-09-11
+score: 0.95900
+model: ipcams_v32_yolo11m_608.onnx / ipcams_color_yolov4.onnx (both)
+source_capture: 091342-tree_line-deer.jpg

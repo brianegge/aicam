@@ -1,0 +1,27 @@
+# False positive: leaf litter and a fallen branch on the slope; 9 hits over 3 days, 0.61-0.97.
+#
+# A static scene feature, not a confidence problem. Raising the deer threshold
+# cannot reach these -- this one peaked at 0.97, and the tree_line pair reach
+# 0.96. Recurs at the same coordinates on 3 separate days and under BOTH the
+# yolov4 pair and the yolo11m model, which is what marks it as scenery rather
+# than a model artefact.
+#
+# TEMPORARY. The paired jpg is a frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only tree_line
+# and delete this pair if it reports RETIRE.
+camera: tree line
+label: deer
+comment: leaf litter and a fallen branch on the slope; 9 hits over 3 days, 0.61-0.97
+box:
+  left: 0.75927734
+  top: 0.26000977
+  width: 0.03417969
+  height: 0.05029297
+center:
+  x: 0.776
+  y: 0.285
+created: 2026-09-11
+score: 0.96600
+model: ipcams_v32_yolo11m_608.onnx / ipcams_color_yolov4.onnx (both)
+source_capture: 210058-tree_line-deer.jpg

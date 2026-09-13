@@ -1,0 +1,27 @@
+# False positive: dark foliage and shadow at the treeline; 2 hits over 2 days.
+#
+# A static scene feature, not a confidence problem. Raising the deer threshold
+# cannot reach these -- this one peaked at 0.51, and the tree_line pair reach
+# 0.96. Recurs at the same coordinates on 2 separate days and under BOTH the
+# yolov4 pair and the yolo11m model, which is what marks it as scenery rather
+# than a model artefact.
+#
+# TEMPORARY. The paired jpg is a frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only swing
+# and delete this pair if it reports RETIRE.
+camera: swing
+label: deer
+comment: dark foliage and shadow at the treeline; 2 hits over 2 days
+box:
+  left: 0.07351426
+  top: 0.00003508
+  width: 0.04796949
+  height: 0.07458964
+center:
+  x: 0.097
+  y: 0.037
+created: 2026-09-11
+score: 0.51000
+model: ipcams_v32_yolo11m_608.onnx / ipcams_color_yolov4.onnx (both)
+source_capture: 181109-swing-deer.jpg

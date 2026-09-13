@@ -1,10 +1,15 @@
-# False positive: same slope, further right; 4 hits over 2 days, 0.91-0.96.
+# False positive: same slope, further right; 2 hits, 1 day, 0.91-0.96.
 #
-# A static scene feature, not a confidence problem. Raising the deer threshold
-# cannot reach these -- this one peaked at 0.96, and the tree_line pair reach
-# 0.96. Recurs at the same coordinates on 2 separate days and under BOTH the
-# yolov4 pair and the yolo11m model, which is what marks it as scenery rather
-# than a model artefact.
+# EVIDENCE IS THIN -- kept deliberately, but read this before trusting it.
+# Audited against the whole capture archive on 2026-09-12 by IoU>0.5:
+# 2 hits on 1 day (2026-09-11). The original text here claimed 4 hits over 2
+# days under both models, which was wrong; the
+# count was never verified when the file was written.
+#
+# The bar this repo set for itself is that one hit is not evidence of a fixed
+# feature -- two single-sighting clusters on west lawn and play were left out
+# on exactly that ground the same night. These were kept anyway, so they are
+# the weakest of the nine and the first to re-examine.
 #
 # TEMPORARY. The paired jpg is a frame that produced it -- after the next
 # ipcams retrain run:
@@ -12,7 +17,7 @@
 # and delete this pair if it reports RETIRE.
 camera: tree line
 label: deer
-comment: same slope, further right; 4 hits over 2 days, 0.91-0.96
+comment: same slope, further right; 2 hits, 1 day, 0.91-0.96
 box:
   left: 0.85009766
   top: 0.27807617

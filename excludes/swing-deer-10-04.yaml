@@ -1,10 +1,21 @@
-# False positive: dark foliage and shadow at the treeline; 2 hits over 2 days.
+# False positive: dark foliage and shadow at the treeline; 1 hit, 1 day.
 #
-# A static scene feature, not a confidence problem. Raising the deer threshold
-# cannot reach these -- this one peaked at 0.51, and the tree_line pair reach
-# 0.96. Recurs at the same coordinates on 2 separate days and under BOTH the
-# yolov4 pair and the yolo11m model, which is what marks it as scenery rather
-# than a model artefact.
+# EVIDENCE IS THIN -- kept deliberately, but read this before trusting it.
+# Audited against the whole capture archive on 2026-09-12 by IoU>0.5:
+# 1 hit on 1 day (2026-09-11 18:11, score 0.51). The original text here
+# claimed 2 hits over 2 days under both models, which was wrong; the
+# count was never verified when the file was written.
+#
+# The bar this repo set for itself is that one hit is not evidence of a fixed
+# feature -- two single-sighting clusters on west lawn and play were left out
+# on exactly that ground the same night. These were kept anyway, so they are
+# the weakest of the nine and the first to re-examine.
+#
+# It is also disputed. Asked about this exact box, the vision model in
+# verify.py answered "deer, partially hidden in brush" at 0.85. Brightening
+# the crop shows a sapling trunk and leaf litter and no animal, but the
+# call is genuinely close, and this exclusion is what stops verify.py
+# being asked at all.
 #
 # TEMPORARY. The paired jpg is a frame that produced it -- after the next
 # ipcams retrain run:
@@ -12,7 +23,7 @@
 # and delete this pair if it reports RETIRE.
 camera: swing
 label: deer
-comment: dark foliage and shadow at the treeline; 2 hits over 2 days
+comment: dark foliage and shadow at the treeline; 1 hit, 1 day
 box:
   left: 0.07351426
   top: 0.00003508

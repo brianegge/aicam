@@ -1,0 +1,27 @@
+# False positive: bare shrub branch tip under IR; 8 alerts on the first night of yolo11m.
+#
+# The yolo11m model reads one upright twig with a leaf cluster at its tip as a
+# rabbit silhouette under night IR. Same 1.7%x6.5% box every time. Never fired
+# under the yolov4 pair on any of the 9 previous capture days, so this is a
+# new-model artefact rather than a threshold problem: peaks reach 0.74 against
+# the 0.50 rabbit threshold.
+#
+# TEMPORARY. The paired jpg is a frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only tree_line
+# and delete this pair if it reports RETIRE.
+camera: tree line
+label: rabbit
+comment: bare shrub branch tip under IR; 8 alerts on the first night of yolo11m
+box:
+  left: 0.57361811
+  top: 0.38173315
+  width: 0.01687998
+  height: 0.06518584
+center:
+  x: 0.582
+  y: 0.414
+created: 2026-09-11
+score: 0.63443
+model: ipcams_v32_yolo11m_608.onnx
+source_capture: 210332-tree_line-rabbit.jpg

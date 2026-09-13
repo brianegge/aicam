@@ -1,0 +1,26 @@
+# False positive: pale stone at the lawn edge under IR; 14 alerts on the first night of yolo11m.
+#
+# A single bright speck on the ground by the driveway edge, 1.2%x2% of the
+# frame. Same box every time from 19:52 to 21:47. Never fired under the yolov4
+# pair on any of the 9 previous capture days. Peaks at 0.76, so the 0.50 rabbit
+# threshold is not the lever.
+#
+# TEMPORARY. The paired jpg is a frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only garage_l
+# and delete this pair if it reports RETIRE.
+camera: garage-l
+label: rabbit
+comment: pale stone at the lawn edge under IR; 14 alerts on the first night of yolo11m
+box:
+  left: 0.06666246
+  top: 0.21194765
+  width: 0.01170953
+  height: 0.01945680
+center:
+  x: 0.070
+  y: 0.222
+created: 2026-09-11
+score: 0.61515
+model: ipcams_v32_yolo11m_608.onnx
+source_capture: 205048-garage-l-rabbit.jpg

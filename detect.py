@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ import humanize
 from PIL import Image
 
 import alpr
+import autolabel
 import frigate_lpr
 import verify
 from alpr import ALPR_STATE_KEYS, wants_alpr
@@ -74,6 +76,22 @@ def label_with_confidence(tag_names, predictions):
         else:
             out.append(tag)
     return ",".join(out)
+
+
+
+def _frame_jpeg(image, quality=90):
+    """The full frame as JPEG bytes, from whichever form it arrived in.
+
+    The whole frame, not a crop: the detector judges whole frames stretched to
+    608x608, so a crop trains the wrong scale.
+    """
+    if isinstance(image, Image.Image):
+        pil = image
+    else:
+        pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    buf = io.BytesIO()
+    pil.convert("RGB").save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
 
 
 def threshold_for(tag_name, thresholds, dark_thresholds, default):
@@ -276,6 +294,18 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     valid_predictions = list(filter(lambda p: not ("ignore" in p), predictions))
     valid_objects = set(p["tagName"] for p in valid_predictions)
     departed_objects = cam.objects - valid_objects
+
+    # A frame where everything was suppressed is a background example, and the
+    # only way to retire the hand-written entries in excludes/ is to put those
+    # frames in the dataset. Deliberately after valid_predictions, so the
+    # "nothing survived" test is on the same list the rest of this function
+    # trusts. Rate limited and deduplicated inside; see autolabel.py.
+    if autolabel.is_negative(predictions):
+        try:
+            autolabel.maybe_upload_negative(
+                cam.name, _frame_jpeg(image), predictions, config)
+        except Exception:
+            logger.exception("negative upload failed for %s", cam.name)
 
     # cam.image is already the full-resolution frame the model ran on, so the
     # ALPR crop and the boxes drawn below describe the same instant.

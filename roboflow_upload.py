@@ -57,6 +57,53 @@ class Config(object):
         return matched
 
 
+def upload_name(cam, detection_tags, filename):
+    """A name that says where the frame came from and what was claimed.
+
+    Review files are content hashes, and passing that straight through as the
+    Roboflow name threw away the only provenance the dataset had: 212 of 1045
+    images in packages-vehicles2 and 539 of 5260 in ipcams2 arrived as bare
+    hashes, so no one could tell which camera they came from or what the
+    detector had said. The hash is kept as a suffix to stay unique.
+    """
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    cam_part = (cam or "unknown").replace(" ", "_").replace("/", "_")
+    tag_part = "_".join(sorted(t for t in (detection_tags or set()) if t)) or "none"
+    return "%s-%s-%s" % (cam_part, tag_part, stem)
+
+
+def upload_image(api_key, project_id, name, image_bytes, split="train", tags=None):
+    """POST one image. Returns the Roboflow image id, or None."""
+    query = {"api_key": api_key, "name": name, "split": split}
+    if tags:
+        query["tag"] = ",".join(sorted(tags))
+    url = "https://api.roboflow.com/dataset/%s/upload?%s" % (project_id, urlencode(query))
+    encoded = base64.b64encode(image_bytes).decode("utf-8")
+    req = Request(url, data=encoded.encode("utf-8"), method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    body = urlopen(req, timeout=30).read().decode("utf-8")
+    try:
+        return json.loads(body).get("id")
+    except ValueError:
+        return None
+
+
+def annotate_null(api_key, project_id, image_id, name):
+    """Attach an empty YOLO annotation, which is what makes it a negative.
+
+    Uploading alone is not enough. An image with no annotation sits in
+    Roboflow's unannotated bucket and teaches the model nothing; an image
+    annotated with zero boxes is a background example and actively suppresses
+    whatever the detector thought it saw there.
+    """
+    url = "https://api.roboflow.com/dataset/%s/annotate/%s?%s" % (
+        project_id, image_id,
+        urlencode({"api_key": api_key, "name": name + ".txt"}))
+    req = Request(url, data=b"", method="POST")
+    req.add_header("Content-Type", "text/plain")
+    return urlopen(req, timeout=30).read().decode("utf-8")
+
+
 _config = None
 
 
@@ -80,7 +127,7 @@ def _do_upload(filename, model, cam, detection_tags):
         return (500, {"error": "failed to read file: %s" % e})
 
     encoded = base64.b64encode(image_data).decode("utf-8")
-    name = os.path.splitext(filename)[0]
+    name = upload_name(cam, detection_tags, filename)
     upload_tags = "%s,%s" % (cam.replace(" ", "_"), model.replace(" ", "_"))
     uploaded = []
 

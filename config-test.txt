@@ -1,0 +1,12 @@
+# Fixture for homeassistant_test.py, which does config.read("config-test.txt").
+#
+# .gitignore has always carried "!/config-test.txt" to keep this out of the
+# config.txt ignore rule, but the file itself was never committed. configparser
+# ignores a missing file without complaining, so the seven tests in
+# homeassistant_test.py raised KeyError('homeassistant') and were quietly left
+# out of the CI test list rather than fixed.
+#
+# Nothing here reaches the network: MockHAAPI patches requests in every test.
+[homeassistant]
+token=test-token-not-a-real-credential
+api=http://homeassistant.invalid:8123/api/

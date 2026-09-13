@@ -16,10 +16,11 @@ jobs:
           python-version: "3.10"
       - name: Compile rootfs-watchdog (C)
         run: gcc -Wall -Werror -O2 -pthread -c watchdog/rootfs-watchdog.c -o /tmp/rw.o
+      # Every module, including the ones nothing imports at start-up.
       - name: Check Python syntax
-        run: python -m py_compile main.py detect.py camera.py notify.py alpr.py frigate_lpr.py codeproject.py detection_base.py yolov4_detection.py ultralytics_detection.py compare_models.py homeassistant.py roboflow_upload.py utils.py logsetup.py
+        run: python -m py_compile main.py detect.py camera.py notify.py alpr.py frigate_lpr.py codeproject.py detection_base.py yolov4_detection.py ultralytics_detection.py compare_models.py homeassistant.py roboflow_upload.py utils.py logsetup.py verify.py excludes.py common.py video.py object_detection.py object_detection_rtv4.py onnx_object_detection.py recheck_excludes.py test-plates.py
       - name: Check syntax against Python 3.6 (deployment target on egge-nano)
-        run: docker run --rm -v "$PWD":/app -w /app python:3.6-slim python -m py_compile main.py detect.py camera.py notify.py alpr.py frigate_lpr.py codeproject.py detection_base.py yolov4_detection.py ultralytics_detection.py compare_models.py homeassistant.py roboflow_upload.py utils.py logsetup.py
+        run: docker run --rm -v "$PWD":/app -w /app python:3.6-slim python -m py_compile main.py detect.py camera.py notify.py alpr.py frigate_lpr.py codeproject.py detection_base.py yolov4_detection.py ultralytics_detection.py compare_models.py homeassistant.py roboflow_upload.py utils.py logsetup.py verify.py excludes.py common.py video.py object_detection.py object_detection_rtv4.py onnx_object_detection.py recheck_excludes.py test-plates.py
 
   test:
     runs-on: ubuntu-latest
@@ -29,6 +30,8 @@ jobs:
         with:
           python-version: "3.10"
       - name: Install test dependencies
-        run: pip install pytest opencv-python-headless numpy requests pillow humanize
+        run: pip install pytest opencv-python-headless numpy requests pillow humanize paho-mqtt sdnotify colorhash filterpy aiohttp PyYAML
+      # Everything, rather than a hand-maintained list: verify.py and four
+      # other test files had accumulated outside it and were never run.
       - name: Run tests
-        run: pytest frigate_lpr_test.py camera_test.py utils_test.py logsetup_test.py yolov4_detection_test.py codeproject_test.py alpr_test.py ultralytics_detection_test.py detect_test.py -v
+        run: pytest -v

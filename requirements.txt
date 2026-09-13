@@ -9,6 +9,9 @@ pytest
 requests
 Pillow==12.3.0
 paho-mqtt
+# excludes.py reads excludes/*.yaml. Without this it logs one warning and
+# ignores every exclusion, which looks exactly like the model regressing.
+PyYAML
 onnx @ git+https://github.com/onnx/onnx.git@cdaa8a8e87c88842062f899e2cf747e642c6b3e4
 onnx-tensorrt==0.1.0
 # https://developer.nvidia.com/blog/announcing-onnx-runtime-for-jetson/

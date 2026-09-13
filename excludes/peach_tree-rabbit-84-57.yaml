@@ -1,0 +1,39 @@
+# False positive: small stake or marker in the lawn.
+#
+# The vision model in verify.py named it repeatedly and never the same way --
+# "small sign on a post", "yard light or post", "mailbox or yard post",
+# "small yard sign or stake". It is a stake; the guessing is what a 30-pixel
+# object at night looks like to anything.
+#
+# Audited over the whole capture archive by IoU>0.5 before this file was
+# written: 44 hits across 3 days (0911,0912,0913), scoring 0.15-0.68. That is
+# the strongest evidence of any exclusion here, and unlike the three deer
+# entries corrected on 2026-09-12 the count was checked first.
+#
+# The box is the median of all 44 hits, not their union: a union box is larger
+# than any single hit and scores worse against all of them. Worst hit against
+# this box is IoU 0.72, comfortably over the 0.5 match.
+#
+# This also stops verify.py paying to re-answer it. Excludes run first and are
+# free; on the night of 2026-09-12 this one spot alone cost about 18 model
+# calls at $0.0026, and the model contradicted itself across them.
+#
+# TEMPORARY. The paired jpg is a frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only peach_tree
+# and delete this pair if it reports RETIRE.
+camera: peach tree
+label: rabbit
+comment: small stake or marker in the lawn
+box:
+  left: 0.83032407
+  top: 0.55033624
+  width: 0.01088154
+  height: 0.03536898
+center:
+  x: 0.836
+  y: 0.568
+created: 2026-09-13
+score: 0.67897
+model: ipcams_v32_yolo11m_608.onnx
+source_capture: 023759-peach_tree-rabbit.jpg

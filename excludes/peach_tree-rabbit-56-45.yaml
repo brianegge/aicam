@@ -1,0 +1,36 @@
+# False positive: ground debris mid-frame.
+#
+# Smallest of the three peach tree clusters but on the same three nights.
+#
+# Audited over the whole capture archive by IoU>0.5 before this file was
+# written: 12 hits across 3 days (0911,0912,0913), scoring 0.51-0.69. That is
+# the strongest evidence of any exclusion here, and unlike the three deer
+# entries corrected on 2026-09-12 the count was checked first.
+#
+# The box is the median of all 12 hits, not their union: a union box is larger
+# than any single hit and scores worse against all of them. Worst hit against
+# this box is IoU 0.58, comfortably over the 0.5 match.
+#
+# This also stops verify.py paying to re-answer it. Excludes run first and are
+# free; on the night of 2026-09-12 this one spot alone cost about 18 model
+# calls at $0.0026, and the model contradicted itself across them.
+#
+# TEMPORARY. The paired jpg is a frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only peach_tree
+# and delete this pair if it reports RETIRE.
+camera: peach tree
+label: rabbit
+comment: ground debris mid-frame
+box:
+  left: 0.54774000
+  top: 0.43846649
+  width: 0.01840466
+  height: 0.03290960
+center:
+  x: 0.557
+  y: 0.455
+created: 2026-09-13
+score: 0.68920
+model: ipcams_v32_yolo11m_608.onnx
+source_capture: 212110-peach_tree-rabbit_vehicle.jpg

@@ -1,0 +1,37 @@
+# False positive: mulch bed rock with an IR shadow, bottom-left corner.
+#
+# A third rock in the same mulch bed as peach_tree-deer-09-94 and -23-90, far
+# enough left to be its own cluster. Under IR it reads as a raccoon all night.
+#
+# Audited over the whole capture archive by IoU>0.5 before this file was
+# written: 96 hits across 3 days (0911,0912,0913), scoring 0.17-0.78. That is
+# the strongest evidence of any exclusion here, and unlike the three deer
+# entries corrected on 2026-09-12 the count was checked first.
+#
+# The box is the median of all 96 hits, not their union: a union box is larger
+# than any single hit and scores worse against all of them. Worst hit against
+# this box is IoU 0.68, comfortably over the 0.5 match.
+#
+# This also stops verify.py paying to re-answer it. Excludes run first and are
+# free; on the night of 2026-09-12 this one spot alone cost about 18 model
+# calls at $0.0026, and the model contradicted itself across them.
+#
+# TEMPORARY. The paired jpg is a frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only peach_tree
+# and delete this pair if it reports RETIRE.
+camera: peach tree
+label: raccoon
+comment: mulch bed rock with an IR shadow, bottom-left corner
+box:
+  left: 0.01294279
+  top: 0.81097449
+  width: 0.03234911
+  height: 0.03798696
+center:
+  x: 0.029
+  y: 0.830
+created: 2026-09-13
+score: 0.77645
+model: ipcams_v32_yolo11m_608.onnx
+source_capture: 221952-peach_tree-raccoon_fox.jpg

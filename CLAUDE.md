@@ -21,14 +21,35 @@ TensorRT in the third decimal — watch class thresholds that sit on a boundary
 
 ## Models
 
+**Model files live in `/Users/claw/aicam-models/`, not in the checkout.**
+`config.txt` names them by absolute path, and `WorkingDirectory` is the repo,
+so a relative name would resolve back into it. They were moved out on
+2026-09-13 after a `git stash -u` during a deploy swept every untracked file
+in `~/aicam` and the `git stash drop` after it discarded them -- recoverable
+only because no `git gc` had run. Both label files moved with them, since a
+model and its labels have to travel together.
+
+    ipcams-labels.txt  ipcams_v32_yolo11m_608.onnx  ipcams_color_yolov4.onnx
+    vehicle-labels.txt packages_vehicles_yolo11s.onnx  ipcams_grey_yolov4.onnx
+    vehicles_yolov4.onnx  packages_vehicles_yolo11s_1088x608.onnx
+
+Nothing backs this directory up. The current ipcams model also exists as
+`~/train/ipcams_v32_yolo11m_608.onnx` (sha256 `ebd7ea63...`), which is what
+made the 2026-09-13 recovery verifiable.
+
 Each model section picks its decoder with `backend=`, so they do not all have
 to be the same architecture:
 
-| model | file | backend |
-|-------|------|---------|
-| color | `ipcams_color_yolov4.onnx` | `yolov4` (default) |
-| grey | `ipcams_grey_yolov4.onnx` | `yolov4` (default) |
-| vehicle | `packages_vehicles_yolo11s.onnx` | `ultralytics` |
+| section | file | backend |
+|---------|------|---------|
+| `[color-model]` | `ipcams_v32_yolo11m_608.onnx` | `ultralytics` |
+| `[vehicle-model]` | `packages_vehicles_yolo11s.onnx` | `ultralytics` |
+
+There is no `[grey-model]` any more. The hue-sum routing between a colour and
+a grey specialist was removed on 2026-09-11 when one combined model replaced
+both; the section is still honoured if present, but omitting it makes the
+colour model serve both. `ipcams_color_yolov4.onnx` and
+`ipcams_grey_yolov4.onnx` are kept in `~/aicam-models` as the rollback.
 
 - `yolov4` — the darknet-lineage models, output `boxes[1,N,1,4]` +
   `confs[1,N,nc]`, normalised corners.

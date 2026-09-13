@@ -3,3 +3,22 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Model artefacts and their label files live in ~/aicam-models on claw-mini,
+# outside this working tree -- see CLAUDE.md. These patterns are belt and
+# braces for anything that still lands here.
+#
+# On 2026-09-13 a `git stash -u` used to get a deploy past a dirty working
+# tree swept every untracked file in the checkout, and the `git stash drop`
+# after it discarded them: all five ONNX models, both label files, the plate
+# and exclusion data, and twelve config backups. Nothing failed until the
+# next restart, three commits later, because the running process already had
+# the model in memory. Recovering it needed `git fsck --unreachable`, and a
+# `git gc` in between would have made that impossible.
+*.onnx
+/ipcams-labels.txt
+/vehicle-labels.txt
+/license-plates.json
+/excludes.json
+/excludes.json.bak-*
+/config.txt.bak-*

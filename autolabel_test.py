@@ -207,9 +207,8 @@ def test_the_null_annotation_is_voc_with_no_objects():
     upload API rejects it with InvalidAnnotationFormat -- as it does an empty
     body, a bare newline and an empty CreateML array. Only VOC parses.
     """
-    import re
     import roboflow_upload
-    xml = roboflow_upload.NULL_VOC % ("peach_tree-deer-abc123", 2688, 1520)
+    xml = roboflow_upload.build_voc("peach_tree-deer-abc123", 2688, 1520)
     assert "<object>" not in xml
     assert "<width>2688</width>" in xml and "<height>1520</height>" in xml
     # Well-formed, or Roboflow will not parse it either.
@@ -240,3 +239,32 @@ def test_the_annotation_is_sent_as_xml_not_text():
     assert "name=stem.xml" in seen["url"]
     assert seen["ctype"] == "text/xml"
     assert b"<object>" not in seen["body"]
+
+
+# --- the VOC writer ----------------------------------------------------------
+
+class TestBuildVoc:
+    def test_no_boxes_is_a_background_example(self):
+        import roboflow_upload
+        xml = roboflow_upload.build_voc("x", 3840, 2160)
+        assert "<object>" not in xml
+
+    def test_a_box_is_converted_to_absolute_pixels(self):
+        """The detector works in 0-1; VOC wants pixels."""
+        import roboflow_upload
+        xml = roboflow_upload.build_voc("x", 1000, 500, [("cat", 0.1, 0.2, 0.3, 0.4)])
+        assert "<name>cat</name>" in xml
+        assert "<xmin>100</xmin><ymin>100</ymin><xmax>400</xmax><ymax>300</ymax>" in xml
+
+    def test_a_box_running_off_the_frame_is_clamped(self):
+        import roboflow_upload
+        xml = roboflow_upload.build_voc("x", 100, 100, [("cat", 0.9, 0.9, 0.5, 0.5)])
+        assert "<xmax>100</xmax><ymax>100</ymax>" in xml
+
+    def test_it_stays_well_formed_with_several_boxes(self):
+        import xml.etree.ElementTree as ET
+        import roboflow_upload
+        doc = roboflow_upload.build_voc(
+            "x", 3840, 2160, [("cat", 0.1, 0.1, 0.1, 0.1), ("deer", 0.5, 0.5, 0.2, 0.2)])
+        root = ET.fromstring(doc)
+        assert [o.find("name").text for o in root.findall("object")] == ["cat", "deer"]

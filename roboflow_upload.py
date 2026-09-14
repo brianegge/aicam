@@ -88,9 +88,40 @@ def upload_image(api_key, project_id, name, image_bytes, split="train", tags=Non
         return None
 
 
-NULL_VOC = ("<annotation><folder></folder><filename>%s.jpg</filename>"
-            "<size><width>%d</width><height>%d</height><depth>3</depth></size>"
-            "<segmented>0</segmented></annotation>")
+_VOC_HEAD = ("<annotation><folder></folder><filename>%s.jpg</filename>"
+             "<size><width>%d</width><height>%d</height><depth>3</depth></size>"
+             "<segmented>0</segmented>")
+_VOC_OBJECT = ("<object><name>%s</name><pose>Unspecified</pose><truncated>0</truncated>"
+               "<difficult>0</difficult><bndbox><xmin>%d</xmin><ymin>%d</ymin>"
+               "<xmax>%d</xmax><ymax>%d</ymax></bndbox></object>")
+
+
+def build_voc(name, width, height, boxes=()):
+    """A Pascal VOC annotation. With no boxes it is a background example.
+
+    boxes are (label, left, top, w, h) with the geometry normalised 0-1, the
+    same convention the detector uses. VOC wants absolute pixels, so they are
+    converted here rather than at every call site.
+    """
+    parts = [_VOC_HEAD % (name, width, height)]
+    for label, left, top, w, h in boxes:
+        parts.append(_VOC_OBJECT % (
+            label,
+            max(0, round(left * width)), max(0, round(top * height)),
+            min(width, round((left + w) * width)), min(height, round((top + h) * height))))
+    parts.append("</annotation>")
+    return "".join(parts)
+
+
+def annotate(api_key, project_id, image_id, name, width, height, boxes=()):
+    """Attach a Pascal VOC annotation. No boxes means a background example."""
+    url = "https://api.roboflow.com/dataset/%s/annotate/%s?%s" % (
+        project_id, image_id,
+        urlencode({"api_key": api_key, "name": name + ".xml"}))
+    body = build_voc(name, width, height, boxes).encode("utf-8")
+    req = Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "text/xml")
+    return urlopen(req, timeout=30).read().decode("utf-8")
 
 
 def annotate_null(api_key, project_id, image_id, name, width, height):
@@ -109,13 +140,7 @@ def annotate_null(api_key, project_id, image_id, name, width, height):
     2026-09-13; the result reads back as {"count": 0, "classes": {}}, the same
     shape as an image marked null by hand in the web UI.
     """
-    url = "https://api.roboflow.com/dataset/%s/annotate/%s?%s" % (
-        project_id, image_id,
-        urlencode({"api_key": api_key, "name": name + ".xml"}))
-    body = (NULL_VOC % (name, width, height)).encode("utf-8")
-    req = Request(url, data=body, method="POST")
-    req.add_header("Content-Type", "text/xml")
-    return urlopen(req, timeout=30).read().decode("utf-8")
+    return annotate(api_key, project_id, image_id, name, width, height)
 
 
 _config = None

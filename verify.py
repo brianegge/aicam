@@ -154,6 +154,19 @@ def _failure_reason(exc):
 # Override per class with suppress-<class> in config.
 POSITIVE_ONLY = {"person": ("dog", "cat", "vehicle")}
 
+# Verdicts aicam can report itself, so a wrong detection can be corrected
+# rather than silenced. "squirrel" and "bird" are not here: aicam has no such
+# class, so they can only suppress.
+#
+# On 2026-09-14 the dog walked past garage-l and was detected only as
+# deer 0.77. The model answered "dog 0.98, dog walking on pavement" and the
+# alert went out as "deer 77%" anyway, because dog is not in deer's suppress
+# set -- correctly, since suppressing it would have lost the alert entirely.
+# There was no separate dog detection on that frame to fall back on. What was
+# wanted was the same alert with the right word in it.
+RELABEL_TO = ("deer", "fox", "coyote", "bear", "dog", "cat",
+              "rabbit", "raccoon", "person", "vehicle")
+
 
 # Causes a retry cannot fix, so they arm the breaker.
 FATAL = ("no OpenRouter credit", "OpenRouter rejected the key")
@@ -362,6 +375,16 @@ def verify_predictions(cam, image, predictions, config):
         p["verified"] = got
 
         if label not in suppress_for(p["tagName"]):
+            # Not something to stay quiet about -- but if the model named a
+            # class aicam has, and it is not the one the detector chose, the
+            # alert should carry the model's word rather than the detector's.
+            if (cfg.getboolean("relabel", True) and label != p["tagName"]
+                    and label in RELABEL_TO
+                    and conf >= cfg.getfloat("min-confidence-relabel", 0.85)):
+                logger.info("  relabelling %s -> %s on the model's %.0f%%",
+                            p["tagName"], label, conf * 100)
+                p["relabelled_from"] = p["tagName"]
+                p["tagName"] = label
             continue
         needed = floor_nothing if label == "nothing" else floor
         if conf < needed:

@@ -456,3 +456,60 @@ def test_the_person_rule_is_configurable():
     run([p], cfg=config(classes="person", suppress_person="nothing"),
         return_value=verdict("nothing", confidence=0.99))
     assert p["ignore"] == "verified: nothing"
+
+
+# --- correcting the label rather than silencing the alert --------------------
+
+def test_a_dog_detected_as_deer_alerts_as_a_dog():
+    """garage-l, 2026-09-14: deer 0.77 -> "dog 0.98, dog walking on pavement".
+
+    Suppressing would have lost the alert: nothing else detected the dog on
+    that frame. What was wanted was the same alert with the right word.
+    """
+    p = pred("deer", score=0.77)
+    run([p], return_value=verdict("dog", confidence=0.98, note="dog walking on pavement"))
+    assert "ignore" not in p
+    assert p["tagName"] == "dog"
+    assert p["relabelled_from"] == "deer"
+
+
+def test_suppression_takes_precedence_over_relabelling():
+    """squirrel is not an aicam class, so it silences rather than renames."""
+    p = pred("fox", score=0.8)
+    run([p], return_value=verdict("squirrel", confidence=0.95))
+    assert p["ignore"] == "verified: squirrel"
+    assert p["tagName"] == "fox"
+
+
+def test_a_confirmed_class_is_left_alone():
+    p = pred("deer", score=0.8)
+    run([p], return_value=verdict("deer", confidence=0.99))
+    assert p["tagName"] == "deer" and "relabelled_from" not in p
+
+
+def test_an_unsure_verdict_does_not_relabel():
+    """Renaming on a guess is worse than the detector's own guess."""
+    p = pred("deer", score=0.8)
+    run([p], return_value=verdict("dog", confidence=0.70))
+    assert p["tagName"] == "deer" and "relabelled_from" not in p
+
+
+def test_a_verdict_aicam_cannot_report_does_not_relabel():
+    """'other' is not a class; leave the detector's word and alert."""
+    p = pred("deer", score=0.8)
+    run([p], cfg=config(suppress="squirrel,bird,nothing"),
+        return_value=verdict("other", confidence=0.99))
+    assert p["tagName"] == "deer" and "ignore" not in p
+
+
+def test_relabelling_can_be_turned_off():
+    p = pred("deer", score=0.77)
+    run([p], cfg=config(relabel="false"), return_value=verdict("dog", confidence=0.98))
+    assert p["tagName"] == "deer" and "ignore" not in p
+
+
+def test_a_person_misread_as_deer_is_relabelled_not_lost():
+    """The direction that matters most: never quieter than the detector was."""
+    p = pred("deer", score=0.6)
+    run([p], return_value=verdict("person", confidence=0.97))
+    assert "ignore" not in p and p["tagName"] == "person"

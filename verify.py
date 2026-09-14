@@ -154,9 +154,19 @@ def _failure_reason(exc):
 # Override per class with suppress-<class> in config.
 POSITIVE_ONLY = {"person": ("dog", "cat", "vehicle")}
 
-# Verdicts aicam can report itself, so a wrong detection can be corrected
+# Verdicts aicam can report itself, so a wrong detection could be renamed
 # rather than silenced. "squirrel" and "bird" are not here: aicam has no such
 # class, so they can only suppress.
+#
+# Off by default, because overriding the detector turned out not to be
+# supported by the evidence. Within an hour of enabling it the detector
+# correctly called the family dog at 79% on the play camera, the model
+# answered "deer 93%, young deer in yard", and the alert went out as deer --
+# worse than the wrong-but-harmless "deer 77%" on garage-l that motivated it.
+# The model is demonstrably good at confirming a detection and at rejecting
+# scenery; that it is *more accurate than the detector when they disagree* is
+# a different claim, and one sample went each way. Both verdicts now appear in
+# the alert instead, which needs no such claim to be true.
 #
 # On 2026-09-14 the dog walked past garage-l and was detected only as
 # deer 0.77. The model answered "dog 0.98, dog walking on pavement" and the
@@ -378,7 +388,7 @@ def verify_predictions(cam, image, predictions, config):
             # Not something to stay quiet about -- but if the model named a
             # class aicam has, and it is not the one the detector chose, the
             # alert should carry the model's word rather than the detector's.
-            if (cfg.getboolean("relabel", True) and label != p["tagName"]
+            if (cfg.getboolean("relabel", False) and label != p["tagName"]
                     and label in RELABEL_TO
                     and conf >= cfg.getfloat("min-confidence-relabel", 0.85)):
                 logger.info("  relabelling %s -> %s on the model's %.0f%%",

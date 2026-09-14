@@ -238,3 +238,44 @@ def test_a_class_with_no_matching_prediction_still_appears():
     assert label_with_confidence({"deer"}, []) == "deer"
     assert label_with_confidence(
         {"deer"}, [{"tagName": "deer"}]) == "deer 0%"
+
+
+# --- both opinions in the alert ------------------------------------------
+
+def _pv(tag, prob, label, confidence):
+    """A prediction the gate has looked at."""
+    return {"tagName": tag, "probability": prob,
+            "verified": {"label": label, "confidence": confidence}}
+
+
+def test_a_disagreement_shows_both_verdicts():
+    """play, 2026-09-14: detector dog 0.79, model "deer 0.93, young deer".
+
+    The detector was right. An hour earlier on garage-l it was the other way
+    round. Printing one and dropping the other loses what distinguishes them.
+    """
+    assert label_with_confidence(
+        {"dog"}, [_pv("dog", 0.79, "deer", 0.93)]) == "dog 79% (vs deer 93%)"
+
+
+def test_agreement_is_shown_as_confirmation():
+    assert label_with_confidence(
+        {"dog"}, [_pv("dog", 0.92, "dog", 0.99)]) == "dog 92% (confirmed 99%)"
+
+
+def test_an_unverified_class_shows_the_score_alone():
+    """Not in the configured classes, or the gate could not be reached."""
+    assert label_with_confidence({"deer"}, [_p("deer", 0.51)]) == "deer 51%"
+
+
+def test_both_are_carried_for_each_class_independently():
+    out = label_with_confidence(
+        {"dog", "person"},
+        [_pv("dog", 0.79, "deer", 0.93), _pv("person", 0.87, "person", 0.95)])
+    assert out == "dog 79% (vs deer 93%),person 87% (confirmed 95%)"
+
+
+def test_a_verdict_without_a_confidence_is_not_printed():
+    """Never render "(vs deer None%)"."""
+    p = {"tagName": "dog", "probability": 0.79, "verified": {"label": "deer"}}
+    assert label_with_confidence({"dog"}, [p]) == "dog 79%"

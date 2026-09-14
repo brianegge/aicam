@@ -53,12 +53,19 @@ def recently_seen(recent_objects, tag_name, now, hold_seconds=OBJECT_HOLD_SECOND
 
 
 def label_with_confidence(tag_names, predictions):
-    """"deer 51%,dog 93%" -- the score that actually triggered the alert.
+    """"dog 79% (vs deer 93%),person 87% (confirmed 95%)" for the alert.
 
-    A notification that only says "deer near swing" gives the reader no way to
-    judge it. The swing false positive of 2026-09-11 18:11 acquired at 0.510
-    against a 0.45 threshold; seeing "deer 51%" on the phone says immediately
-    that this was a marginal call, where "deer 93%" does not.
+    Carries both opinions, the detector's and verify.py's, because neither is
+    reliably right when they disagree. On 2026-09-14 the detector called the
+    family dog at 79% on the play camera and the model said "deer 93%, young
+    deer in yard"; an hour earlier the detector called the same dog a deer at
+    77% on garage-l and the model correctly said dog. Printing one and
+    discarding the other loses the only signal that tells those two cases
+    apart -- that the two disagreed at all.
+
+    A bare score means the class was never verified: not in the configured
+    classes, or the gate could not be reached, in which case unverified_note
+    says why.
 
     Highest score per class, because that is the one that cleared the bar.
     """
@@ -67,31 +74,25 @@ def label_with_confidence(tag_names, predictions):
         tag = p.get("tagName")
         if tag in tag_names:
             score = p.get("probability") or 0
-            if score > best.get(tag, -1):
-                best[tag] = score
+            if tag not in best or score > (best[tag].get("probability") or 0):
+                best[tag] = p
+
     out = []
     for tag in sorted(tag_names):
-        if tag in best:
-            out.append("%s %.0f%%" % (tag, best[tag] * 100))
-        else:
+        p = best.get(tag)
+        if p is None:
             out.append(tag)
+            continue
+        part = "%s %.0f%%" % (tag, (p.get("probability") or 0) * 100)
+        verdict = p.get("verified") or {}
+        label, confidence = verdict.get("label"), verdict.get("confidence")
+        if label and confidence is not None:
+            if label == tag:
+                part += " (confirmed %.0f%%)" % (confidence * 100)
+            else:
+                part += " (vs %s %.0f%%)" % (label, confidence * 100)
+        out.append(part)
     return ",".join(out)
-
-
-
-def _frame_jpeg(image, quality=90):
-    """The full frame as JPEG bytes, from whichever form it arrived in.
-
-    The whole frame, not a crop: the detector judges whole frames stretched to
-    608x608, so a crop trains the wrong scale.
-    """
-    if isinstance(image, Image.Image):
-        pil = image
-    else:
-        pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-    buf = io.BytesIO()
-    pil.convert("RGB").save(buf, format="JPEG", quality=quality)
-    return buf.getvalue()
 
 
 def threshold_for(tag_name, thresholds, dark_thresholds, default):

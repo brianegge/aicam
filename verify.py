@@ -378,9 +378,29 @@ def verify_predictions(cam, image, predictions, config):
             return set(POSITIVE_ONLY[tag]) | {"nothing"}
         return suppress
 
-    # 0.90, not 0.95: the model's "nothing" verdicts clustered at 0.94-0.98,
-    # so a 0.95 bar drops a third of the real catches for no gain.
-    floor_nothing = cfg.getfloat("min-confidence-nothing", 0.90)
+    # 0.70. Raised to 0.90 at first, on the reasoning that "nothing" is also
+    # what the model answers when it cannot read the crop, so a hedged
+    # "nothing" should not be trusted. Measuring it says otherwise.
+    #
+    # Across 2026-09-14, 31 wildlife detections were let through by the 0.90
+    # bar. Every one of their notes names a specific object rather than
+    # hedging about whether anything is there: "rock and shadow", "only a
+    # leaf", "back of a chair", "folds in a bag", "marks on pavement edge",
+    # "tree stump and wood". Two of the highest-risk were checked at full
+    # resolution -- cat 0.80 over folds in a white bag, cat 0.61 over a pale
+    # rock in the peach tree bed -- and both are scenery. The ten person
+    # cases, at 0.70 to 0.99, were correct as well.
+    #
+    # The confidence on a "nothing" verdict tracks how well the model can
+    # *name* what is there, not how sure it is the box is empty. When it is
+    # genuinely torn it returns an animal label, not "nothing". Filtering on
+    # that number was filtering on the wrong axis.
+    #
+    # 0.70 rather than 0 because a handful do hedge about presence itself --
+    # "unclear dark shape or noise" at 0.43, "tree base and shadows only" at
+    # 0.68 -- and those should still alert. person keeps its own bar at 0.95;
+    # see NOTHING_FLOOR_STRICT.
+    floor_nothing = cfg.getfloat("min-confidence-nothing", 0.70)
     person_floor = cfg.getfloat("person-present-confidence", 0.6)
     # Off by default; see the note above on detector confidence.
     ceiling = cfg.getfloat("max-score", 1.01)

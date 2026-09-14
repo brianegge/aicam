@@ -279,10 +279,11 @@ def test_a_ceiling_can_be_configured_for_those_who_want_it():
     assert "ignore" not in p and not asked.called
 
 
-def test_nothing_needs_more_confidence_than_a_positive_identification():
-    """Absence of evidence from a crop the model may have failed to read."""
+def test_a_hedged_nothing_still_alerts():
+    """"unclear dark shape or noise" at 0.43 -- hedging about presence."""
     p = pred("deer", score=0.7)
-    run([p], return_value=verdict("nothing", confidence=0.85))
+    run([p], return_value=verdict("nothing", confidence=0.43,
+                                  note="unclear dark shape or noise"))
     assert "ignore" not in p
 
 
@@ -602,3 +603,31 @@ def test_the_prior_can_be_turned_off():
     run([deer, person], cfg=config(people_imply_pets="false"),
         return_value=verdict("dog", confidence=0.98))
     assert deer["tagName"] == "deer"
+
+
+def test_a_named_object_silences_a_wildlife_detection():
+    """garage, 2026-09-14: cat 0.80 over folds in a bag, "nothing" at 0.76.
+
+    Verified at full resolution. The confidence on a "nothing" verdict is
+    about naming the object, not about whether the box is empty -- when the
+    model is genuinely torn it answers with an animal, not "nothing".
+    """
+    p = pred("cat", score=0.80)
+    run([p], return_value=verdict("nothing", confidence=0.76, note="folds in a bag"))
+    assert p["ignore"] == "verified: nothing"
+
+
+def test_the_driveway_road_marking_is_silenced():
+    """driveway 17:46: deer 0.63, "nothing 0.70, indistinct motion blur"."""
+    p = pred("deer", score=0.63)
+    run([p], return_value=verdict("nothing", confidence=0.70,
+                                  note="indistinct motion blur"))
+    assert p["ignore"] == "verified: nothing"
+
+
+def test_person_keeps_its_higher_bar():
+    """The same 0.76 that silences a cat must not silence a person."""
+    p = pred("person", score=0.8)
+    run([p], cfg=config(classes="person"),
+        return_value=verdict("nothing", confidence=0.76, note="folds in a bag"))
+    assert "ignore" not in p

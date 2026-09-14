@@ -417,11 +417,30 @@ def test_a_dog_called_a_person_is_suppressed():
     assert p["ignore"] == "verified: dog"
 
 
-def test_nothing_never_silences_a_person():
-    """Absence of evidence is also what an unreadable crop returns."""
-    p = pred("person", score=0.7)
-    run([p], cfg=config(classes="person"), return_value=verdict("nothing", confidence=0.99))
+def test_an_unmistakable_nothing_silences_a_person():
+    """deck 17:05: person 0.57 over a chair handle, "nothing" at 0.99."""
+    p = pred("person", score=0.57)
+    run([p], cfg=config(classes="person"),
+        return_value=verdict("nothing", confidence=0.99, note="plastic equipment handle"))
+    assert p["ignore"] == "verified: nothing"
+
+
+def test_a_merely_probable_nothing_still_alerts_a_person():
+    """Most person "nothing" verdicts land at 0.70-0.80 and are not enough.
+
+    The same 0.72 would silence a deer. A person is held higher because the
+    cost of being wrong is not symmetric.
+    """
+    p = pred("person", score=0.8)
+    run([p], cfg=config(classes="person"),
+        return_value=verdict("nothing", confidence=0.72, note="only shadow and pavement"))
     assert "ignore" not in p
+
+
+def test_that_same_confidence_does_silence_a_deer():
+    p = pred("deer", score=0.8)
+    run([p], return_value=verdict("nothing", confidence=0.92))
+    assert p["ignore"] == "verified: nothing"
 
 
 def test_other_never_silences_a_person():

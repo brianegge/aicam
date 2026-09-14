@@ -175,6 +175,22 @@ def _failure_reason(exc):
 # Override per class with suppress-<class> in config.
 POSITIVE_ONLY = {"person": ("dog", "cat", "vehicle")}
 
+# "nothing" may silence a POSITIVE_ONLY class, but only from much higher up.
+#
+# Refusing it outright was too strict. Over 2026-09-14 the model returned
+# "nothing" for ten person detections and was right every time -- a trash can,
+# an empty plastic swing, a can of insect repellent, a shadow, a push handle,
+# a toy balance bike -- while confirming all 89 real people as person. It has
+# not once answered "nothing" about a person who was there.
+#
+# But it is noticeably less certain about an absent person than an absent
+# animal: those ten ran 0.70 to 0.99, where wildlife "nothing" clusters at
+# 0.94-0.99. A person-shaped object is genuinely more ambiguous. So the bar is
+# 0.95 rather than the 0.90 used elsewhere, which on that day's evidence
+# catches the unmistakable cases (a chair handle at 0.99, a balance bike at
+# 0.98) and leaves the merely-probable ones to alert.
+NOTHING_FLOOR_STRICT = 0.95
+
 # Verdicts aicam can report itself, so a wrong detection could be renamed
 # rather than silenced. "squirrel" and "bird" are not here: aicam has no such
 # class, so they can only suppress.
@@ -358,7 +374,8 @@ def verify_predictions(cam, image, predictions, config):
         if override is not None:
             return {c.strip() for c in override.split(",") if c.strip()}
         if tag in POSITIVE_ONLY:
-            return set(POSITIVE_ONLY[tag])
+            # "nothing" is allowed in, but held to NOTHING_FLOOR_STRICT below.
+            return set(POSITIVE_ONLY[tag]) | {"nothing"}
         return suppress
 
     # 0.90, not 0.95: the model's "nothing" verdicts clustered at 0.94-0.98,
@@ -467,7 +484,12 @@ def verify_predictions(cam, image, predictions, config):
                 p["relabelled_from"] = p["tagName"]
                 p["tagName"] = label
             continue
-        needed = floor_nothing if label == "nothing" else floor
+        if label == "nothing":
+            needed = (cfg.getfloat("min-confidence-nothing-strict",
+                                   NOTHING_FLOOR_STRICT)
+                      if p["tagName"] in POSITIVE_ONLY else floor_nothing)
+        else:
+            needed = floor
         if conf < needed:
             # Unsure is not a reason to stay quiet.
             logger.info("  %s below the %.2f floor, alerting anyway", label, needed)

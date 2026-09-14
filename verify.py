@@ -90,7 +90,11 @@ ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 # Constrained choice rather than free text: matching "grey squirrel" or
 # "a small rodent" back onto a class list is a second guessing problem, and
 # the model is markedly steadier when the answers are enumerated.
-LABELS = ["deer", "fox", "coyote", "dog", "cat", "rabbit", "raccoon",
+# "bear" is listed for the same reason "coyote" is: not because it is common,
+# but because "other" is suppressed by default, so anything missing from this
+# list is silently dropped when the model is confident about it. Black bears
+# are resident in Connecticut and would otherwise land in "other".
+LABELS = ["deer", "fox", "coyote", "bear", "dog", "cat", "rabbit", "raccoon",
           "squirrel", "bird", "person", "vehicle", "other", "nothing"]
 
 PROMPT = (

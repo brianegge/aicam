@@ -392,3 +392,16 @@ def test_the_breaker_reopens_after_its_window():
         verify._breaker["until"] = 0.0          # window elapsed
         verify.verify_predictions(cam, frame(), [pred("fox", left=0.3)], config())
     assert asked.call_count == 2
+
+
+def test_an_animal_big_enough_to_matter_is_not_in_the_other_bucket():
+    """"other" is suppressed, so any animal missing from LABELS is dropped."""
+    for animal in ("bear", "coyote", "deer", "fox"):
+        assert animal in verify.LABELS, animal
+    assert "other" not in ("bear", "coyote")
+
+
+def test_a_bear_alerts():
+    p = pred("dog", score=0.7)
+    run([p], return_value=verdict("bear", confidence=0.95))
+    assert "ignore" not in p

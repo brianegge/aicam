@@ -405,3 +405,54 @@ def test_a_bear_alerts():
     p = pred("dog", score=0.7)
     run([p], return_value=verdict("bear", confidence=0.95))
     assert "ignore" not in p
+
+
+# --- person is not symmetric with the other classes --------------------------
+
+def test_a_dog_called_a_person_is_suppressed():
+    """The deck dog produced person 0.64 and 0.83 on 2026-09-14."""
+    p = pred("person", score=0.83)
+    run([p], cfg=config(classes="deer,fox,rabbit,raccoon,coyote,cat,dog,person"),
+        return_value=verdict("dog", confidence=0.99, note="dog on wooden deck"))
+    assert p["ignore"] == "verified: dog"
+
+
+def test_nothing_never_silences_a_person():
+    """Absence of evidence is also what an unreadable crop returns."""
+    p = pred("person", score=0.7)
+    run([p], cfg=config(classes="person"), return_value=verdict("nothing", confidence=0.99))
+    assert "ignore" not in p
+
+
+def test_other_never_silences_a_person():
+    p = pred("person", score=0.7)
+    run([p], cfg=config(classes="person"), return_value=verdict("other", confidence=0.99))
+    assert "ignore" not in p
+
+
+def test_a_confirmed_person_alerts():
+    p = pred("person", score=0.7)
+    run([p], cfg=config(classes="person"), return_value=verdict("person", confidence=0.99))
+    assert "ignore" not in p
+
+
+def test_a_balance_bike_called_a_person_is_suppressed():
+    """The gate already called one a vehicle rather than a dog."""
+    p = pred("person", score=0.7)
+    run([p], cfg=config(classes="person"),
+        return_value=verdict("vehicle", confidence=0.9, note="toddler balance bike"))
+    assert p["ignore"] == "verified: vehicle"
+
+
+def test_nothing_still_silences_a_deer():
+    """The restriction applies to person, not to everything."""
+    p = pred("deer", score=0.7)
+    run([p], return_value=verdict("nothing", confidence=0.99))
+    assert p["ignore"] == "verified: nothing"
+
+
+def test_the_person_rule_is_configurable():
+    p = pred("person", score=0.7)
+    run([p], cfg=config(classes="person", suppress_person="nothing"),
+        return_value=verdict("nothing", confidence=0.99))
+    assert p["ignore"] == "verified: nothing"

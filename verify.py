@@ -138,6 +138,23 @@ def _failure_reason(exc):
     return "verification failed"
 
 
+# Classes whose alert may only be silenced by an affirmative identification of
+# something else, never by absence of evidence.
+#
+# A person alert is not symmetric with a deer alert. Dropping a deer that was
+# really there costs nothing; dropping a person does. So "nothing" -- which is
+# also what the model answers when it simply could not read the crop -- is not
+# allowed to silence a person, and neither is "other". Only a concrete
+# alternative will: the model naming a dog, a cat or a vehicle.
+#
+# This exists because the dog on the deck reads as a person. On 2026-09-14 it
+# produced person 0.64 and 0.83 while, on the same camera and in the same
+# minute, the gate was confirming dog 51% -> dog 99%, dog 88% -> dog 99% and
+# correctly calling a toddler's balance bike a vehicle rather than a dog.
+# Override per class with suppress-<class> in config.
+POSITIVE_ONLY = {"person": ("dog", "cat", "vehicle")}
+
+
 # Causes a retry cannot fix, so they arm the breaker.
 FATAL = ("no OpenRouter credit", "OpenRouter rejected the key")
 
@@ -265,6 +282,16 @@ def verify_predictions(cam, image, predictions, config):
                 cfg.get("suppress", "squirrel,bird,nothing,other").split(",")
                 if c.strip()}
     floor = cfg.getfloat("min-confidence", 0.6)
+
+    def suppress_for(tag):
+        """What may silence this class, which is not the same for every class."""
+        override = cfg.get("suppress-%s" % tag)
+        if override is not None:
+            return {c.strip() for c in override.split(",") if c.strip()}
+        if tag in POSITIVE_ONLY:
+            return set(POSITIVE_ONLY[tag])
+        return suppress
+
     # 0.90, not 0.95: the model's "nothing" verdicts clustered at 0.94-0.98,
     # so a 0.95 bar drops a third of the real catches for no gain.
     floor_nothing = cfg.getfloat("min-confidence-nothing", 0.90)
@@ -334,7 +361,7 @@ def verify_predictions(cam, image, predictions, config):
                     label, conf * 100, got.get("note", ""), got.get("cost"))
         p["verified"] = got
 
-        if label not in suppress:
+        if label not in suppress_for(p["tagName"]):
             continue
         needed = floor_nothing if label == "nothing" else floor
         if conf < needed:

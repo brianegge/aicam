@@ -517,3 +517,69 @@ def test_a_person_misread_as_deer_is_relabelled_not_lost():
     p = pred("deer", score=0.6)
     run([p], cfg=config(relabel="true"), return_value=verdict("person", confidence=0.97))
     assert "ignore" not in p and p["tagName"] == "person"
+
+
+# --- a wild animal beside a person is a pet ---------------------------------
+
+def test_a_deer_beside_a_person_is_the_dog():
+    """west_lawn 16:29: detector deer 0.75, model dog 0.98, child in frame."""
+    deer = pred("deer", score=0.75)
+    person = pred("person", score=0.67, left=0.556)
+    run([deer, person], return_value=verdict("dog", confidence=0.98))
+    assert deer["tagName"] == "dog"
+    assert deer["relabelled_from"] == "deer"
+    assert deer["prior"] == "person in frame"
+    assert "ignore" not in deer
+
+
+def test_a_dog_the_model_calls_a_deer_stays_a_dog_beside_a_person():
+    """play 15:19: detector dog 0.79, model deer 0.93, child in frame.
+
+    The prior decides it without trusting either model over the other --
+    which is the point, because each was right once today and wrong once.
+    """
+    dog = pred("dog", score=0.79)
+    person = pred("person", score=0.87, left=0.100)
+    run([dog, person], cfg=config(classes="dog,deer"),
+        return_value=verdict("deer", confidence=0.93))
+    assert dog["tagName"] == "dog" and "ignore" not in dog
+    assert dog["prior"] == "person in frame"
+
+
+def test_no_person_means_the_prior_does_not_apply():
+    """A deer alone in the garden is just a deer."""
+    deer = pred("deer", score=0.75)
+    run([deer], return_value=verdict("deer", confidence=0.95))
+    assert deer["tagName"] == "deer" and "prior" not in deer
+
+
+def test_a_low_confidence_person_does_not_trigger_it():
+    deer = pred("deer", score=0.75)
+    person = pred("person", score=0.30, left=0.556)
+    run([deer, person], return_value=verdict("deer", confidence=0.95))
+    assert deer["tagName"] == "deer" and "prior" not in deer
+
+
+def test_an_ignored_person_does_not_count():
+    """A person suppressed as road traffic is not in the garden."""
+    deer = pred("deer", score=0.75)
+    person = pred("person", score=0.9, left=0.556)
+    person["ignore"] = "road"
+    run([deer, person], return_value=verdict("deer", confidence=0.95))
+    assert deer["tagName"] == "deer" and "prior" not in deer
+
+
+def test_the_prior_does_not_touch_unrelated_pairs():
+    """rabbit vs nothing is not about people; normal handling applies."""
+    rabbit = pred("rabbit", score=0.6)
+    person = pred("person", score=0.9, left=0.556)
+    run([rabbit, person], return_value=verdict("nothing", confidence=0.99))
+    assert rabbit["ignore"] == "verified: nothing"
+
+
+def test_the_prior_can_be_turned_off():
+    deer = pred("deer", score=0.75)
+    person = pred("person", score=0.87, left=0.556)
+    run([deer, person], cfg=config(people_imply_pets="false"),
+        return_value=verdict("dog", confidence=0.98))
+    assert deer["tagName"] == "deer"

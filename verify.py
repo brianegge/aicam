@@ -99,12 +99,33 @@ LABELS = ["deer", "fox", "coyote", "bear", "dog", "cat", "rabbit", "raccoon",
 
 PROMPT = (
     "A motion detector on a home security camera claims the red box contains "
-    "a %s. Judge only what is inside the red box.\n"
+    "a %s. Judge only what is inside the red box.%s\n"
     'Reply with JSON and nothing else: {"label": one of [%s], '
     '"confidence": 0.0-1.0, "note": "at most five words"}\n'
     'Use "nothing" when the box holds only vegetation, shadow, bare ground, '
     'snow, rain, or part of a building or vehicle. Use "other" for an animal '
     "that is none of the listed ones."
+)
+
+# Told to the model when other things are detected in the same frame. Two
+# separate problems, one fix.
+#
+# It keeps answering about the wrong subject. The crop carries three times the
+# box for context, so when the family is outside with the dog a child is often
+# inside it, and the model describes the child: "dog 83% -> person 100% (young
+# child crouching)" eleven times on 2026-09-14, every one of them a correctly
+# detected dog standing near a correctly detected person.
+#
+# And it cannot apply the obvious prior without knowing the rest of the frame.
+# Deer do not graze beside people. Across the whole capture archive dog+person
+# is the commonest pairing at 51 frames, while deer+person happens twice --
+# and both of those, checked by eye, are the dog. A model told a person is
+# present has what it needs to prefer dog over deer; blind to it, it answered
+# "deer 93%, young deer in yard" about the family dog walking with a child.
+FRAME_CONTEXT = (
+    " The detector also reports elsewhere in this frame, outside the red box: "
+    "%s. Use that as context for what is plausible here -- this is a "
+    "residential garden -- but describe only the red box."
 )
 
 # Set while the key is known bad, so we stop paying a round trip per detection
@@ -177,6 +198,27 @@ POSITIVE_ONLY = {"person": ("dog", "cat", "vehicle")}
 RELABEL_TO = ("deer", "fox", "coyote", "bear", "dog", "cat",
               "rabbit", "raccoon", "person", "vehicle")
 
+# Wild animals that do not stay beside people, and the domestic ones that do.
+#
+# When the detector and the model disagree across these two sets and a person
+# is in the same frame, the domestic reading wins. This is a prior about the
+# garden, not about either model, and it is the only thing that separates two
+# cases neither model can:
+#
+#   play 15:19      detector dog  0.79, model deer 0.93  -> dog   (correct)
+#   west_lawn 16:29 detector deer 0.75, model dog  0.98  -> dog   (correct)
+#
+# Measured over the whole capture archive: dog+person is the commonest pairing
+# at 51 frames; deer+person occurs twice, and both of those are the dog,
+# confirmed by eye at full resolution. So P(real deer | person in frame) is
+# indistinguishable from zero here.
+#
+# Prompting does not achieve this. Told plainly that a person was in the frame
+# and that a large animal beside one is more likely a pet, the model still
+# answered "deer 0.88, deer browsing near child" about the collie.
+WARY_OF_PEOPLE = ("deer", "fox", "coyote")
+DOMESTIC_NEAR_PEOPLE = ("dog", "cat")
+
 
 # Causes a retry cannot fix, so they arm the breaker.
 FATAL = ("no OpenRouter credit", "OpenRouter rejected the key")
@@ -238,8 +280,12 @@ def _crop(image, box, context, max_edge, min_window=400):
     return buf.getvalue()
 
 
-def ask(image_bytes, tag, cfg):
-    """The model's verdict, or None if it could not be obtained."""
+def ask(image_bytes, tag, cfg, others=()):
+    """The model's verdict, or None if it could not be obtained.
+
+    others names the classes detected elsewhere in the same frame.
+    """
+    context = FRAME_CONTEXT % ", ".join(sorted(others)) if others else ""
     body = {
         "model": cfg.get("model", "google/gemini-3.8-flash"),
         # Generous, because the reasoning tokens are charged against this
@@ -250,7 +296,7 @@ def ask(image_bytes, tag, cfg):
         # Removes the ```json fences rather than stripping them afterwards.
         "response_format": {"type": "json_object"},
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": PROMPT % (tag, ", ".join(LABELS))},
+            {"type": "text", "text": PROMPT % (tag, context, ", ".join(LABELS))},
             {"type": "image_url", "image_url": {
                 "url": "data:image/jpeg;base64," +
                        base64.b64encode(image_bytes).decode()}},
@@ -318,6 +364,7 @@ def verify_predictions(cam, image, predictions, config):
     # 0.90, not 0.95: the model's "nothing" verdicts clustered at 0.94-0.98,
     # so a 0.95 bar drops a third of the real catches for no gain.
     floor_nothing = cfg.getfloat("min-confidence-nothing", 0.90)
+    person_floor = cfg.getfloat("person-present-confidence", 0.6)
     # Off by default; see the note above on detector confidence.
     ceiling = cfg.getfloat("max-score", 1.01)
     iou_floor = cfg.getfloat("cache-iou", 0.8)
@@ -353,7 +400,13 @@ def verify_predictions(cam, image, predictions, config):
             jpeg = _crop(image, p["boundingBox"],
                          cfg.getfloat("context", 3.0), cfg.getint("max-edge", 768),
                          cfg.getint("min-window", 400))
-            got = ask(jpeg, p["tagName"], cfg)
+            # Everything else the detector sees in this frame, so the model
+            # can judge what is plausible and knows the other subjects are
+            # not what it was asked about.
+            others = {q.get("tagName") for q in predictions
+                      if q is not p and q.get("tagName")
+                      and not q.get("hold_only")} - {p["tagName"]}
+            got = ask(jpeg, p["tagName"], cfg, others)
         except Exception as e:
             reason = _failure_reason(e)
             p["unverified"] = reason
@@ -383,6 +436,24 @@ def verify_predictions(cam, image, predictions, config):
                     p["tagName"], (p.get("probability") or 0) * 100,
                     label, conf * 100, got.get("note", ""), got.get("cost"))
         p["verified"] = got
+
+        # Common sense before either model's opinion: a wild animal standing
+        # beside a person in a garden is a pet.
+        person_present = any(
+            q.get("tagName") == "person" and (q.get("probability") or 0) >= person_floor
+            and "ignore" not in q
+            for q in predictions if q is not p)
+        pair = {p["tagName"], label}
+        if (person_present and cfg.getboolean("people-imply-pets", True)
+                and pair & set(WARY_OF_PEOPLE) and pair & set(DOMESTIC_NEAR_PEOPLE)):
+            domestic = (label if label in DOMESTIC_NEAR_PEOPLE else p["tagName"])
+            if p["tagName"] != domestic:
+                logger.info("  %s -> %s: a person is in frame, so the pet reading wins",
+                            p["tagName"], domestic)
+                p["relabelled_from"] = p["tagName"]
+                p["tagName"] = domestic
+            p["prior"] = "person in frame"
+            continue
 
         if label not in suppress_for(p["tagName"]):
             # Not something to stay quiet about -- but if the model named a

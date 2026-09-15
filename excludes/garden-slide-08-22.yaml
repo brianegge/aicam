@@ -1,0 +1,40 @@
+# False positive: the children's slide, identified by Brian on 2026-09-14.
+#
+# Fixed garden equipment, which is what an exclusion is for. Contrast the deck
+# clutter -- a chair handle and a can of insect repellent -- which recur just
+# as reliably but get moved, so geometry is the wrong tool there and the
+# vision model handles them instead.
+#
+# Audited over the whole capture archive before this file was written:
+# 17 hits across 4 days (0911,0912,0913,0914), scoring 0.17-0.81.
+#
+# label is "*". The detector reads the slide as {'cat': 14, 'person': 2, 'dog': 1}, so a single-class
+# entry would cover only the name it happened to use that day. That includes
+# person, normally the last class to suppress by geometry; acceptable here
+# because the box is 120x104 px in a 3840x2160 frame and a real
+# person at that spot would be several times larger, so nothing person-sized
+# matches at IoU 0.5.
+#
+# Box is the median of all 17 hits, not their union: a union box is larger
+# than any single hit and scores worse against all of them. Worst hit against
+# this box is IoU 0.56.
+#
+# TEMPORARY. The paired jpg is a frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only garden
+# and delete this pair if it reports RETIRE.
+camera: garden
+label: "*"
+comment: children's slide
+box:
+  left: 0.06950334
+  top: 0.19658383
+  width: 0.03114546
+  height: 0.04814249
+center:
+  x: 0.085
+  y: 0.221
+created: 2026-09-14
+score: 0.80640
+model: ipcams_v32_yolo11m_608.onnx
+source_capture: 195133-garden-cat.jpg

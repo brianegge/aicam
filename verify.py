@@ -232,6 +232,11 @@ RELABEL_TO = ("deer", "fox", "coyote", "bear", "dog", "cat",
 # Prompting does not achieve this. Told plainly that a person was in the frame
 # and that a large animal beside one is more likely a pet, the model still
 # answered "deer 0.88, deer browsing near child" about the collie.
+# One object cannot be two of these at once, unlike person+package where a
+# delivery driver genuinely holds a parcel and both boxes are correct.
+MUTUALLY_EXCLUSIVE = ("deer", "fox", "coyote", "bear", "dog", "cat",
+                      "rabbit", "raccoon")
+
 WARY_OF_PEOPLE = ("deer", "fox", "coyote")
 DOMESTIC_NEAR_PEOPLE = ("dog", "cat")
 
@@ -402,6 +407,7 @@ def verify_predictions(cam, image, predictions, config):
     # see NOTHING_FLOOR_STRICT.
     floor_nothing = cfg.getfloat("min-confidence-nothing", 0.70)
     person_floor = cfg.getfloat("person-present-confidence", 0.6)
+    dup_iou = cfg.getfloat("duplicate-box-iou", 0.8)
     # Off by default; see the note above on detector confidence.
     ceiling = cfg.getfloat("max-score", 1.01)
     iou_floor = cfg.getfloat("cache-iou", 0.8)
@@ -473,6 +479,29 @@ def verify_predictions(cam, image, predictions, config):
                     p["tagName"], (p.get("probability") or 0) * 100,
                     label, conf * 100, got.get("note", ""), got.get("cost"))
         p["verified"] = got
+
+        # The detector sometimes puts two labels on one animal -- "coyote 0.86"
+        # and "dog 0.54" on boxes differing in the third decimal, tree line
+        # 2026-09-14. When the model names one of the two, it is choosing
+        # between the detector's own proposals rather than overriding it, so
+        # the loser is a duplicate and not a second animal. Nothing is lost:
+        # the object still alerts under the other box.
+        #
+        # Restricted to mutually exclusive classes. person+package overlaps
+        # twelve times in the archive and is usually a real person holding a
+        # real parcel.
+        if label != p["tagName"] and label in MUTUALLY_EXCLUSIVE \
+                and p["tagName"] in MUTUALLY_EXCLUSIVE:
+            twin = next((q for q in predictions
+                         if q is not p and q.get("tagName") == label
+                         and "ignore" not in q
+                         and bb_intersection_over_union(
+                             q["boundingBox"], p["boundingBox"]) > dup_iou), None)
+            if twin is not None:
+                logger.info("  %s is the same box as the %s detection; "
+                            "keeping the %s", p["tagName"], label, label)
+                p["ignore"] = "duplicate of the %s box" % label
+                continue
 
         # Common sense before either model's opinion: a wild animal standing
         # beside a person in a garden is a pet.

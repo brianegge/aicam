@@ -631,3 +631,50 @@ def test_person_keeps_its_higher_bar():
     run([p], cfg=config(classes="person"),
         return_value=verdict("nothing", confidence=0.76, note="folds in a bag"))
     assert "ignore" not in p
+
+
+# --- two labels on one animal ------------------------------------------------
+
+def test_the_losing_label_on_one_object_is_dropped():
+    """tree line 21:03: coyote 0.86 and dog 0.54 on the same box, model says dog."""
+    coyote = pred("coyote", score=0.86, left=0.855, top=0.839, width=0.072, height=0.109)
+    dog = pred("dog", score=0.54, left=0.855, top=0.839, width=0.077, height=0.108)
+    run([coyote, dog], cfg=config(classes="coyote,dog"),
+        return_value=verdict("dog", confidence=0.95, note="domestic dog walking"))
+    assert coyote["ignore"] == "duplicate of the dog box"
+
+
+def test_the_surviving_detection_still_alerts():
+    """Never quieter than before: the animal is still reported."""
+    coyote = pred("coyote", score=0.86, left=0.855, top=0.839, width=0.072, height=0.109)
+    dog = pred("dog", score=0.54, left=0.855, top=0.839, width=0.077, height=0.108)
+    run([coyote, dog], cfg=config(classes="coyote,dog"),
+        return_value=verdict("dog", confidence=0.95))
+    assert "ignore" not in dog
+
+
+def test_two_separate_animals_are_both_kept():
+    """Different places in the frame; not a duplicate."""
+    coyote = pred("coyote", score=0.86, left=0.1, top=0.1)
+    dog = pred("dog", score=0.54, left=0.7, top=0.7)
+    run([coyote, dog], cfg=config(classes="coyote,dog"),
+        return_value=verdict("dog", confidence=0.95))
+    assert "ignore" not in coyote
+
+
+def test_a_person_holding_a_package_is_left_alone():
+    """person+package overlaps 12 times in the archive and is usually real."""
+    package = pred("package", score=0.8, left=0.4, top=0.4, width=0.1, height=0.1)
+    person = pred("person", score=0.9, left=0.4, top=0.4, width=0.11, height=0.11)
+    run([package, person], cfg=config(classes="package,person"),
+        return_value=verdict("person", confidence=0.99))
+    assert "ignore" not in package
+
+
+def test_no_twin_means_no_duplicate():
+    """The model disagreeing on its own is not evidence of a duplicate."""
+    coyote = pred("coyote", score=0.86)
+    run([coyote], cfg=config(classes="coyote"),
+        return_value=verdict("dog", confidence=0.95))
+    assert "ignore" not in coyote
+    assert coyote["tagName"] == "coyote"

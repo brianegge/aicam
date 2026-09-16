@@ -1,0 +1,58 @@
+# False positive: the empty pink toddler swing -- the thing this camera is
+# named after and pointed at.
+#
+# Fixed play equipment, the same case as the garden slide. The difference is
+# that this one hangs, so it drifts a few pixels in the wind; the box below is
+# the mean of all 15 hits rather than any single one for that reason.
+#
+# Audited over the whole capture archive (2026-09-02 onward) before this file
+# was written, by scoring all 93 detections this camera has recorded against
+# the box below. It catches 15 and nothing else:
+#
+#   15 hits, IoU 0.861-0.947, scoring 0.18-0.62, on 2026-09-14 (5) and
+#      2026-09-16 (10); nothing at this spot on any earlier day, so the swing
+#      went up on 09-14
+#   78 other detections -- people, dogs, cats -- worst IoU 0.155
+#
+# The 0.86 floor is far tighter than the slide's 0.56: a small hanging seat
+# moves its box less than a large object does.
+#
+# label is person, not "*". The detector has called this spot person and
+# nothing else, 15 for 15.
+#
+# THE RISK, stated plainly. Suppressing person by geometry is what this repo
+# is most reluctant to do, and this box sits on a seat a child is meant to sit
+# in. The arithmetic that bounds it: the box is 76x95 px in 3840x2160, so a
+# detection in the same column is only suppressed while it stays under ~190 px
+# tall. Every real person this camera has reported ran 246-533 px, which is
+# where the 0.155 worst case above comes from. A small child seated in the
+# swing is the case with the least margin -- roughly, a toddler who fills less
+# than twice the seat's height would be lost. If a real detection ever goes
+# missing here, this file is the reason.
+#
+# verify.py already reads this correctly and cannot act on it. The vision
+# model answers "nothing", noting "empty pink swing" / "empty baby swing" /
+# "empty plastic child swing", but only at 0.75-0.76, and person is held to
+# NOTHING_FLOOR_STRICT = 0.95. That bar is right -- it was set on evidence
+# that person "nothing" verdicts run 0.70-0.99 and are not all trustworthy --
+# so geometry is the tool left.
+#
+# TEMPORARY. The paired jpg is a frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only swing
+# and delete this pair if it reports RETIRE.
+camera: swing
+label: person
+comment: empty pink toddler swing
+box:
+  left: 0.55102600
+  top: 0.14025800
+  width: 0.01988200
+  height: 0.04399800
+center:
+  x: 0.561
+  y: 0.162
+created: 2026-09-16
+score: 0.61601
+model: ipcams_v32_yolo11m_608.onnx
+source_capture: 143612-swing-person.jpg

@@ -3,7 +3,6 @@ import logging
 import os
 import uuid
 from io import BytesIO
-from pprint import pformat
 from urllib.parse import urlencode
 
 import cv2
@@ -344,6 +343,10 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
         # prepare post
         output_bytes = BytesIO()
         cropped_image.save(output_bytes, "jpeg")
+        # Read off the size here rather than measuring the buffer later: the
+        # attachment limit is the most likely way this post gets rejected, and
+        # tell() after a write is free.
+        attachment_bytes = output_bytes.tell()
         output_bytes.seek(0)
         # send as -2 to generate no notification/alert, -1 to always send as a quiet notification, 1 to display as high-priority and bypass the user's quiet hours, or 2 to also require confirmation from the user
         pushover_data = {
@@ -385,8 +388,25 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
                 files={"attachment": ("image.jpg", output_bytes, "image/jpeg")},
             )
             if r.status_code != 200:
-                logging.warning(pformat(r))
-                logging.warning(pformat(r.headers))
+                # Pushover puts the reason in the body -- {"errors": [...]} --
+                # and nowhere else. Logging the status and the Cloudflare
+                # headers, which is all this did until 2026-09-16, produced 113
+                # rejections between 09-02 and 09-16 that could not be explained
+                # afterwards. The sizes are here because every documented cause
+                # of a 400 is a limit being passed: attachment 2.5 MB, message
+                # 1024 chars, url 512, url_title 100. Truncated because an
+                # upstream error can arrive as a full HTML page.
+                logger.warning(
+                    "Pushover rejected p%s for %s: %s %s "
+                    "(attachment %.0f KB, message %d chars, url %d chars)",
+                    priority,
+                    cam.name,
+                    r.status_code,
+                    r.text.strip()[:500],
+                    attachment_bytes / 1024.0,
+                    len(message),
+                    len(pushover_data.get("url", "")),
+                )
         except Exception:
             logger.exception("Failed to call Pushover")
 

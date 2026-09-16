@@ -78,7 +78,15 @@ def main():
     labels_by_model = {"ipcams": set(ipcams_labels), "vehicle": set(vehicle_labels)}
 
     color_model = load_model(cfg["color-model"], ipcams_labels, False)
-    grey_model = load_model(cfg["grey-model"], ipcams_labels, False)
+    # [grey-model] has been optional since the 2026-09-11 model swap, and the
+    # deployed config omits it. main.py reuses the colour model in that case;
+    # this has to load the same models aicam is running or its verdict is
+    # about a pipeline nobody has.
+    grey_model = (
+        load_model(cfg["grey-model"], ipcams_labels, False)
+        if cfg.has_section("grey-model")
+        else color_model
+    )
     vehicle_model = load_model(cfg["vehicle-model"], vehicle_labels, False)
     set_model_input_sizes(color_model, vehicle_model)
 

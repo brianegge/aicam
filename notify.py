@@ -274,12 +274,19 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
         vehicle_message = ""
         plates_db = _load_license_plates()
         house_cleaner_found = False
+        pause_person_found = False
         for plate in plates:
             matched_key = _match_plate(plate) or _match_plate(plate.replace(" ", ""))
             if matched_key:
                 r = plates_db[matched_key]
                 if len(vehicle_message) > 0:
                     vehicle_message += " and "
+                if r.get("suppress_person"):
+                    # A crew that works the property for an hour sets off the
+                    # person detector continuously. Flagged per vehicle in
+                    # lpr-enrich's plates.json rather than by owner name, so a
+                    # second lawn or building crew needs no code change.
+                    pause_person_found = True
                 if "owner" in r:
                     vehicle_message += r["owner"] + "'s "
                     if r["owner"].lower() == "house cleaner":
@@ -309,6 +316,17 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
                 message += "\n" + vehicle_message + " " + plate
         if house_cleaner_found:
             ha.house_cleaners_arrived()
+        if pause_person_found:
+            # script.pause_person_detector: turn input_boolean.person_detector
+            # off, wait for binary_sensor.doors to be shut 5 minutes, and turn
+            # it back on -- with a 15 minute timeout, so the suppression always
+            # ends by itself. The script is mode:restart, so every fresh read
+            # of this plate extends the pause rather than stacking another.
+            #
+            # That bound is deliberate. Person detection off means a person in
+            # the driveway who is NOT the crew goes unannounced too.
+            logging.info("Pausing person detector: %s is here", plate)
+            ha.suppress_notify_person()
 
     #    if has_package and (priority >= 0 or has_dog):
     #        prob = max(map(lambda x: x["probability"], packages))

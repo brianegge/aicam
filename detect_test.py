@@ -286,26 +286,26 @@ def test_a_verdict_without_a_confidence_is_not_printed():
 
 # --- how long a track survives with no detection -------------------------
 
-def _tracked(age, static=True, last_time=None):
+def _expiring(age, static=True, last_time=None):
     return {"age": age, "static": static,
             "last_time": last_time or datetime.now()}
 
 
 def test_expiry_grows_with_age():
     """Something long established is not dropped over a brief gap."""
-    assert detect.expiry_minutes(_tracked(0, static=False), 10) == pytest.approx(1.0)
-    assert detect.expiry_minutes(_tracked(12, static=False), 10) == pytest.approx(3.0)
+    assert detect.expiry_minutes(_expiring(0, static=False), 10) == pytest.approx(1.0)
+    assert detect.expiry_minutes(_expiring(12, static=False), 10) == pytest.approx(3.0)
 
 
 def test_expiry_is_capped():
-    assert detect.expiry_minutes(_tracked(100000, static=False), 10) == 60
+    assert detect.expiry_minutes(_expiring(100000, static=False), 10) == 60
 
 
 def test_a_track_that_never_moved_survives_longer():
     """The 2026-09-19 lululemon package: age 8, interval 10s, announced
     departed after 2.3 minutes while still plainly sitting there."""
-    moving = detect.expiry_minutes(_tracked(8, static=False), 10)
-    parked = detect.expiry_minutes(_tracked(8, static=True), 10)
+    moving = detect.expiry_minutes(_expiring(8, static=False), 10)
+    parked = detect.expiry_minutes(_expiring(8, static=True), 10)
     assert moving == pytest.approx(2.333, abs=0.01)
     assert parked == pytest.approx(9.333, abs=0.01)
 
@@ -313,12 +313,12 @@ def test_a_track_that_never_moved_survives_longer():
 def test_a_single_sighting_earns_no_bonus():
     """One sighting has not shown the object is stationary, only that it has
     not yet shown otherwise."""
-    assert detect.expiry_minutes(_tracked(1, static=True), 10) == \
-        detect.expiry_minutes(_tracked(1, static=False), 10)
+    assert detect.expiry_minutes(_expiring(1, static=True), 10) == \
+        detect.expiry_minutes(_expiring(1, static=False), 10)
 
 
 def test_the_static_bonus_is_still_capped():
-    assert detect.expiry_minutes(_tracked(100000, static=True), 10) == 60
+    assert detect.expiry_minutes(_expiring(100000, static=True), 10) == 60
 
 
 def test_a_track_with_no_static_key_behaves_as_moving():
@@ -357,7 +357,7 @@ def test_an_object_that_moves_stops_being_static():
     detect.track_predictions(
         [{"tagName": "person", "boundingBox": _box(0.5, 0.5, 0.2, 0.2),
           "probability": 0.9}], prev, [])
-    moved = {"tagName": "person", "boundingBox": _box(0.60, 0.60, 0.2, 0.2),
+    moved = {"tagName": "person", "boundingBox": _box(0.558, 0.5, 0.2, 0.2),
              "probability": 0.9}
     detect.track_predictions([moved], prev, [])
     assert prev["person"][0]["static"] is False
@@ -370,7 +370,7 @@ def test_a_slow_drift_cannot_creep_past_the_check():
     detect.track_predictions(
         [{"tagName": "person", "boundingBox": _box(0.30, 0.5, 0.2, 0.2),
           "probability": 0.9}], prev, [])
-    for left in (0.33, 0.36, 0.39, 0.42, 0.45):
+    for left in (0.33, 0.36, 0.39, 0.42, 0.45):  # each step matches, the sum does not
         detect.track_predictions(
             [{"tagName": "person", "boundingBox": _box(left, 0.5, 0.2, 0.2),
               "probability": 0.9}], prev, [])
@@ -382,13 +382,13 @@ def test_once_moved_it_does_not_become_static_again():
     bonus by sitting still afterwards."""
     prev = {}
     detect.track_predictions(
-        [{"tagName": "vehicle", "boundingBox": _box(0.10, 0.5, 0.2, 0.2),
+        [{"tagName": "vehicle", "boundingBox": _box(0.100, 0.5, 0.2, 0.2),
           "probability": 0.9}], prev, [])
     detect.track_predictions(
-        [{"tagName": "vehicle", "boundingBox": _box(0.40, 0.5, 0.2, 0.2),
+        [{"tagName": "vehicle", "boundingBox": _box(0.158, 0.5, 0.2, 0.2),
           "probability": 0.9}], prev, [])
     for _ in range(5):
         detect.track_predictions(
-            [{"tagName": "vehicle", "boundingBox": _box(0.40, 0.5, 0.2, 0.2),
+            [{"tagName": "vehicle", "boundingBox": _box(0.158, 0.5, 0.2, 0.2),
               "probability": 0.9}], prev, [])
     assert prev["vehicle"][0]["static"] is False

@@ -57,6 +57,22 @@ def predictions_for(image, color_model, vehicle_model, label, labels_by_model):
     return color_model.predict_image(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB))
 
 
+def matches(preds, label, box, iou=0.5):
+    """Predictions this exclusion would suppress.
+
+    A "*" exclusion covers every class, because detect.py matches it against
+    each prediction without looking at tagName -- these objects do not keep one
+    name, and one stake was excluded as a rabbit and alerted as a raccoon from
+    the same pixels. Testing `tagName != "*"` matches nothing, which reported
+    RETIRE at score 0.00 for every wildcard exclusion however hard the model
+    fired on it.
+    """
+    wildcard = label == "*"
+    return [p for p in preds
+            if (wildcard or p["tagName"] == label)
+            and bb_intersection_over_union(box, p["boundingBox"]) > iou]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -114,26 +130,28 @@ def main():
             continue
 
         label = doc["label"]
+        wildcard = label == "*"
         box = {k: float(doc["box"][k]) for k in ("left", "top", "width", "height")}
-        thr = thresholds.get(label, default_threshold)
 
         preds = predictions_for(image, color_model, vehicle_model,
                                 label, labels_by_model)
-        hit = None
-        for p in preds:
-            if p["tagName"] != label or p["probability"] < thr:
-                continue
-            if bb_intersection_over_union(box, p["boundingBox"]) > args.iou:
-                if hit is None or p["probability"] > hit["probability"]:
-                    hit = p
+        here = matches(preds, label, box, args.iou)
+        # Each class carries its own threshold, so a wildcard has to be judged
+        # per prediction rather than against one number.
+        firing = [p for p in here
+                  if p["probability"] >= thresholds.get(p["tagName"], default_threshold)]
+        hit = max(firing, key=lambda p: p["probability"], default=None)
+        best = hit or max(here, key=lambda p: p["probability"], default=None)
+        shown = best["tagName"] if (best and wildcard) else label
+        thr = thresholds.get(best["tagName"] if best else label, default_threshold)
 
         if hit:
-            print("%-34s %-9s %7.2f  STILL NEEDED (threshold %.2f)" % (stem, label, hit["probability"], thr))
+            print("%-34s %-9s %7.2f  STILL NEEDED (threshold %.2f)"
+                  % (stem, shown, hit["probability"], thr))
             needed += 1
         else:
-            best = max((p["probability"] for p in preds if p["tagName"] == label), default=0.0)
             print("%-34s %-9s %7.2f  RETIRE -- no longer detected above %.2f"
-                  % (stem, label, best, thr))
+                  % (stem, shown, best["probability"] if best else 0.0, thr))
             retire += 1
 
     print("\n%d still needed, %d can be retired, %d unrecheckable" % (needed, retire, missing))

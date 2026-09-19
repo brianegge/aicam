@@ -95,6 +95,21 @@ def label_with_confidence(tag_names, predictions):
     return ",".join(out)
 
 
+def _frame_jpeg(image, quality=90):
+    """The full frame as JPEG bytes, from whichever form it arrived in.
+
+    The whole frame, not a crop: the detector judges whole frames stretched to
+    608x608, so a crop trains the wrong scale.
+    """
+    if isinstance(image, Image.Image):
+        pil = image
+    else:
+        pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    buf = io.BytesIO()
+    pil.convert("RGB").save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
 def threshold_for(tag_name, thresholds, dark_thresholds, default):
     """New-object threshold for a class, preferring the dark override.
 

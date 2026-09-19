@@ -1,0 +1,54 @@
+# False positive: a small fixed dark object on the deck boards, identified
+# 2026-09-19 after it took person alerting down for most of a morning.
+#
+# How it broke things, because the geometry is only half the story. This spot
+# held ONE aicam track alive for 175+ cycles -- frame-to-frame IoU 0.94-0.98,
+# i.e. it never moved -- while two code paths disagreed about it:
+#   * MQTT kept flapping deck/person/count 1->0->1->0, and
+#     automation.keypad_person_detection_chime fires on those edges, so the
+#     6160 keypad chimed all morning.
+#   * notify.py sets priority -4 for any prediction carrying an "iou" key (the
+#     repeat-detection dedupe), so a track that never ends never re-notifies
+#     and no Pushover was ever sent.
+# Beeping keypad, silent phone, for ~50 minutes. Excluding the geometry is
+# what stops the track being created in the first place.
+#
+# Audited over the whole capture archive by IoU>0.5 before this file was
+# written: 21 hits across 6 days (0912, 0914, 0915, 0917, 0918, 0919), scoring
+# 0.17-0.64. The person threshold is 0.55, so only some of those alerted -- but
+# all of them fed the track.
+#
+# Box is the median of all 21 hits, not their union: a union box is larger than
+# any single hit and scores worse against all of them. Worst hit against this
+# box is IoU 0.50, the weakest of any exclusion here; the same object also
+# produced one 0.49 that this will miss. Tightening is not worth it -- see
+# below for why the downside is bounded.
+#
+# label is "person", not "*". Over the archive this box has only ever been
+# called person, 21 out of 21, so there is no second name to cover.
+#
+# person is normally the last class to suppress by geometry. Acceptable here
+# because the box is 61x189 px in a 3840x2160 frame: real people on this deck
+# score IoU 0.06, 0.05, 0.01 and 0.00 against it, so nothing person-sized
+# matches at 0.5. The nearest non-hit of any kind is 0.49 -- and that is this
+# same object again, not a human.
+#
+# TEMPORARY. The paired jpg is the frame that produced it -- after the next
+# ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only deck
+# and delete this pair if it reports RETIRE.
+camera: deck
+label: person
+comment: small fixed dark object on the deck boards
+box:
+  left: 0.20841357
+  top: 0.64183569
+  width: 0.01579173
+  height: 0.08759499
+center:
+  x: 0.216
+  y: 0.686
+created: 2026-09-19
+score: 0.53546
+model: ipcams_v32_yolo11m_608.onnx
+source_capture: 071909-deck-person.jpg

@@ -28,7 +28,6 @@ import os
 import sys
 
 import cv2
-import numpy as np
 import yaml
 
 from camera import set_model_input_sizes
@@ -37,20 +36,22 @@ from detect import bb_intersection_over_union
 from main import load_model
 
 
-def predictions_for(image, color_model, grey_model, vehicle_model, label, labels_by_model):
-    """Run the model that owns `label`, using camera.py's own preprocessing."""
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    is_grey = np.sum(hsv[:, :, 0]) == 0
+def predictions_for(image, color_model, vehicle_model, label, labels_by_model):
+    """Run the model that owns `label`, using camera.py's own preprocessing.
 
+    Three channels, unconditionally, because that is what camera.py:resize()
+    does since the 2026-09-11 swap to one combined model. There used to be a
+    second path here that converted a greyscale frame to a single channel for a
+    grey specialist; keeping it after the specialist was gone fed a 1-channel
+    image to the 3-channel combined model and raised "axes don't match array"
+    on the first IR exclusion. If this ever stops matching resize(), the
+    verdict is about a pipeline nobody is running.
+    """
     if label in labels_by_model["vehicle"]:
         resized = cv2.cvtColor(
             cv2.resize(image, camera_mod.VEHICLE_INPUT_SIZE), cv2.COLOR_BGR2RGB
         )
         return vehicle_model.predict_image(resized)
-
-    if is_grey:
-        grey = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        return grey_model.predict_image(cv2.resize(grey, camera_mod.IPCAMS_INPUT_SIZE))
 
     resized = cv2.resize(image, camera_mod.IPCAMS_INPUT_SIZE)
     return color_model.predict_image(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB))
@@ -77,16 +78,9 @@ def main():
         vehicle_labels = [l.strip() for l in f]
     labels_by_model = {"ipcams": set(ipcams_labels), "vehicle": set(vehicle_labels)}
 
+    # One ipcams model since 2026-09-11. [grey-model] is not read at all --
+    # camera.py has no greyscale path left to replicate.
     color_model = load_model(cfg["color-model"], ipcams_labels, False)
-    # [grey-model] has been optional since the 2026-09-11 model swap, and the
-    # deployed config omits it. main.py reuses the colour model in that case;
-    # this has to load the same models aicam is running or its verdict is
-    # about a pipeline nobody has.
-    grey_model = (
-        load_model(cfg["grey-model"], ipcams_labels, False)
-        if cfg.has_section("grey-model")
-        else color_model
-    )
     vehicle_model = load_model(cfg["vehicle-model"], vehicle_labels, False)
     set_model_input_sizes(color_model, vehicle_model)
 
@@ -123,7 +117,7 @@ def main():
         box = {k: float(doc["box"][k]) for k in ("left", "top", "width", "height")}
         thr = thresholds.get(label, default_threshold)
 
-        preds = predictions_for(image, color_model, grey_model, vehicle_model,
+        preds = predictions_for(image, color_model, vehicle_model,
                                 label, labels_by_model)
         hit = None
         for p in preds:

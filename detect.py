@@ -39,6 +39,27 @@ def add_centers(predictions):
 # is rebuilt every frame, so it only ever bridged a single missed frame -- not
 # two consecutive dips, and not a capture error.
 OBJECT_HOLD_SECONDS = 60
+
+# Two boxes this close are the same object, in the same place, that has not
+# moved. Compared against the box the track *started* on, not the previous
+# frame, so a slow drift cannot creep past it one frame at a time.
+STATIC_IOU = 0.6
+
+# How much longer a track that has never moved survives without being
+# detected. A lululemon package sat on the driveway edge on 2026-09-19 and
+# was announced "departed" while it was still plainly there: it cleared the
+# 0.80 package threshold exactly once in nine sightings (0.82, with the rest
+# 0.18-0.56 carried by the hold below), and when the light changed and the
+# detector stopped emitting any box at all, the track expired 2.3 minutes
+# later.
+#
+# The asymmetry is the argument. A package that has not shifted a pixel in
+# five minutes is furniture; when it stops being detected, a detection
+# failure is far likelier than someone having removed it. Something that was
+# *moving* and then vanishes really has usually left. So only stationary
+# tracks get the benefit of the doubt, and the ones most likely to be
+# genuinely departing are unaffected.
+STATIC_EXPIRY_MULTIPLIER = 4
 # Matched to the detector's conf floor, so a weak frame on an object we are
 # already holding actually reaches this check instead of being discarded twice.
 HOLD_PROBABILITY = 0.15
@@ -154,6 +175,23 @@ def apply_thresholds(
     return kept
 
 
+def expiry_minutes(tracked, interval):
+    """How long a track survives with no detection at all, in minutes.
+
+    Grows with age so that something long-established is not dropped over a
+    brief gap, and is capped so nothing is held for ever. A track that has
+    never moved gets STATIC_EXPIRY_MULTIPLIER times as long -- see the
+    constant for why the asymmetry is deliberate.
+    """
+    minutes = 1 + tracked["age"] * interval / 60
+    # age >= 2 so the bonus needs the object to have actually been seen in
+    # the same place more than once; a single sighting has not yet shown it
+    # is stationary, it has only failed to show otherwise.
+    if tracked.get("static") and tracked["age"] >= 2:
+        minutes *= STATIC_EXPIRY_MULTIPLIER
+    return min(minutes, 60)
+
+
 def track_predictions(valid_predictions, prev_predictions, new_predictions):
     """Match this frame's predictions to the tracks carried from earlier ones.
 
@@ -174,10 +212,17 @@ def track_predictions(valid_predictions, prev_predictions, new_predictions):
             logger.debug(f"iou {this_name} = prev_box & this_box = {iou}")
             if iou > 0.5:
                 p["iou"] = iou
+                # Against where the track *began*: comparing with the previous
+                # frame would let an object drift across the whole scene while
+                # every single step looked stationary.
+                if bb_intersection_over_union(
+                    prev.get("anchor_box", this_box), this_box
+                ) <= STATIC_IOU:
+                    prev["static"] = False
                 prev["boundingBox"] = this_box  # move the box to current
                 prev["last_time"] = datetime.now()
                 prev["age"] = prev["age"] + 1
-                for t in ["age", "ignore", "priority", "priority_type"] + list(
+                for t in ["age", "ignore", "priority", "priority_type", "static"] + list(
                     ALPR_STATE_KEYS
                 ):
                     if t in prev:
@@ -190,6 +235,10 @@ def track_predictions(valid_predictions, prev_predictions, new_predictions):
             p["start_time"] = datetime.now()
             p["last_time"] = datetime.now()
             p["age"] = 0
+            # Copied: prev["boundingBox"] is reassigned every match, and the
+            # anchor has to keep describing where the track began.
+            p["anchor_box"] = dict(this_box)
+            p["static"] = True
             prev_class.append(p)
             new_predictions.append(p)
     return tracked_pairs, unmatched_holds
@@ -389,8 +438,9 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     expired = []
     for prev_tag, prev_class in cam.prev_predictions.items():
         for x in prev_class:
-            expiry_minutes = min(1 + x["age"] * cam.interval / 60, 60)
-            if x["last_time"] < datetime.now() - timedelta(minutes=expiry_minutes):
+            if x["last_time"] < datetime.now() - timedelta(
+                minutes=expiry_minutes(x, cam.interval)
+            ):
                 expired.append(x)
         prev_class[:] = [x for x in prev_class if x not in expired]
 

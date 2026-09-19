@@ -1,11 +1,14 @@
-"""Tests for the new-object threshold selection, including the dark override."""
+"""Tests for the new-object threshold selection, including the dark override,
+and for how long a track survives once the detector stops seeing it."""
 
 import configparser
+from datetime import datetime
 
 import pytest
 
 pytest.importorskip("cv2")
 
+import detect
 from detect import label_with_confidence, threshold_for
 
 DEFAULT = 0.7
@@ -279,3 +282,113 @@ def test_a_verdict_without_a_confidence_is_not_printed():
     """Never render "(vs deer None%)"."""
     p = {"tagName": "dog", "probability": 0.79, "verified": {"label": "deer"}}
     assert label_with_confidence({"dog"}, [p]) == "dog 79%"
+
+
+# --- how long a track survives with no detection -------------------------
+
+def _tracked(age, static=True, last_time=None):
+    return {"age": age, "static": static,
+            "last_time": last_time or datetime.now()}
+
+
+def test_expiry_grows_with_age():
+    """Something long established is not dropped over a brief gap."""
+    assert detect.expiry_minutes(_tracked(0, static=False), 10) == pytest.approx(1.0)
+    assert detect.expiry_minutes(_tracked(12, static=False), 10) == pytest.approx(3.0)
+
+
+def test_expiry_is_capped():
+    assert detect.expiry_minutes(_tracked(100000, static=False), 10) == 60
+
+
+def test_a_track_that_never_moved_survives_longer():
+    """The 2026-09-19 lululemon package: age 8, interval 10s, announced
+    departed after 2.3 minutes while still plainly sitting there."""
+    moving = detect.expiry_minutes(_tracked(8, static=False), 10)
+    parked = detect.expiry_minutes(_tracked(8, static=True), 10)
+    assert moving == pytest.approx(2.333, abs=0.01)
+    assert parked == pytest.approx(9.333, abs=0.01)
+
+
+def test_a_single_sighting_earns_no_bonus():
+    """One sighting has not shown the object is stationary, only that it has
+    not yet shown otherwise."""
+    assert detect.expiry_minutes(_tracked(1, static=True), 10) == \
+        detect.expiry_minutes(_tracked(1, static=False), 10)
+
+
+def test_the_static_bonus_is_still_capped():
+    assert detect.expiry_minutes(_tracked(100000, static=True), 10) == 60
+
+
+def test_a_track_with_no_static_key_behaves_as_moving():
+    """Tracks carried across a restart or built by older code."""
+    assert detect.expiry_minutes({"age": 8, "last_time": datetime.now()}, 10) \
+        == pytest.approx(2.333, abs=0.01)
+
+
+# --- deciding that a track has moved -------------------------------------
+
+def _box(left, top, w=0.1, h=0.1):
+    return {"left": left, "top": top, "width": w, "height": h}
+
+
+def test_a_new_track_starts_static_with_an_anchor():
+    prev = {}
+    new = []
+    p = {"tagName": "package", "boundingBox": _box(0.5, 0.5), "probability": 0.9}
+    detect.track_predictions([p], prev, new)
+    assert p["static"] is True
+    assert p["anchor_box"] == _box(0.5, 0.5)
+
+
+def test_a_stationary_object_stays_static():
+    prev = {}
+    detect.track_predictions(
+        [{"tagName": "package", "boundingBox": _box(0.5, 0.5), "probability": 0.9}],
+        prev, [])
+    p2 = {"tagName": "package", "boundingBox": _box(0.502, 0.501), "probability": 0.3}
+    detect.track_predictions([p2], prev, [])
+    assert prev["package"][0]["static"] is True
+
+
+def test_an_object_that_moves_stops_being_static():
+    prev = {}
+    detect.track_predictions(
+        [{"tagName": "person", "boundingBox": _box(0.5, 0.5, 0.2, 0.2),
+          "probability": 0.9}], prev, [])
+    moved = {"tagName": "person", "boundingBox": _box(0.60, 0.60, 0.2, 0.2),
+             "probability": 0.9}
+    detect.track_predictions([moved], prev, [])
+    assert prev["person"][0]["static"] is False
+
+
+def test_a_slow_drift_cannot_creep_past_the_check():
+    """Compared against where the track began, not the previous frame --
+    otherwise an object crosses the scene while every step looks stationary."""
+    prev = {}
+    detect.track_predictions(
+        [{"tagName": "person", "boundingBox": _box(0.30, 0.5, 0.2, 0.2),
+          "probability": 0.9}], prev, [])
+    for left in (0.33, 0.36, 0.39, 0.42, 0.45):
+        detect.track_predictions(
+            [{"tagName": "person", "boundingBox": _box(left, 0.5, 0.2, 0.2),
+              "probability": 0.9}], prev, [])
+    assert prev["person"][0]["static"] is False
+
+
+def test_once_moved_it_does_not_become_static_again():
+    """A car that parks has still arrived; it must not earn the furniture
+    bonus by sitting still afterwards."""
+    prev = {}
+    detect.track_predictions(
+        [{"tagName": "vehicle", "boundingBox": _box(0.10, 0.5, 0.2, 0.2),
+          "probability": 0.9}], prev, [])
+    detect.track_predictions(
+        [{"tagName": "vehicle", "boundingBox": _box(0.40, 0.5, 0.2, 0.2),
+          "probability": 0.9}], prev, [])
+    for _ in range(5):
+        detect.track_predictions(
+            [{"tagName": "vehicle", "boundingBox": _box(0.40, 0.5, 0.2, 0.2),
+              "probability": 0.9}], prev, [])
+    assert prev["vehicle"][0]["static"] is False

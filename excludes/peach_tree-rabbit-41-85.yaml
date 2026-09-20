@@ -1,0 +1,52 @@
+# False positive: a pale object in the lawn, lower-left of centre -- a rock or
+# a fallen leaf, too small to tell at this range. Third piece of ground
+# debris on this camera (see -56-45 and -84-57).
+#
+# It appeared on 2026-09-18 -- first hit 19:33:11, nothing at this spot on
+# any earlier day -- and was still there, unchanged, on a live frame at
+# 2026-09-19 20:21. The detector cannot decide what it is: in two nights it
+# has called it rabbit 28 times, fox 10, raccoon 7, which is why label is "*".
+#
+# Audited over the whole capture archive (2026-09-04 onward) by scoring all
+# 1467 detections this camera has recorded against the box below:
+#
+#   46 hits in 37 captures, IoU 0.53-0.97, scoring 0.16-0.80, all on
+#      2026-09-18 and 2026-09-19
+#   1421 other detections, worst IoU 0.029
+#
+# The box is not the mean of the hits. The hits run from 0.021x0.030 (the
+# 20:03:38 alert this file was written for) up to 0.031x0.055, and a mean box
+# scores the smallest of them at IoU 0.45, under the 0.5 match. This one was
+# chosen to maximise the worst-case IoU over all 46; the 0.53 floor is the
+# small box, the next-worst is 0.56.
+#
+# verify.py saw it correctly and could not act: "nothing -- likely a rock",
+# "leaf debris on ground", "shadow or ground marking", "appears to be fallen
+# leaf" -- but at 0.65-0.68 every time, just under the 0.70 floor, so each
+# one "alerted anyway". Once, at dusk (19:29:19), it said "crouching rabbit"
+# at 0.68 and confirmed the false positive. That is the same object; the
+# frames are identical at that spot.
+#
+# Cost of the wildcard: a real rabbit sitting on this exact 109x90 px patch
+# would be lost. Every real animal this camera has recorded elsewhere -- the
+# deer at (0.19,0.87), the fox at (0.19,0.68) -- is clear of it.
+#
+# TEMPORARY. The paired jpg is the 2026-09-19 20:03:38 frame -- after the
+# next ipcams retrain run:
+#     python3 recheck_excludes.py --config config.txt --only peach_tree
+# and delete this pair if it reports RETIRE. Or simply pick the thing up.
+camera: peach tree
+label: "*"
+comment: pale rock or leaf in the lawn
+box:
+  left: 0.39300000
+  top: 0.83200000
+  width: 0.02850000
+  height: 0.04150000
+center:
+  x: 0.407
+  y: 0.853
+created: 2026-09-19
+score: 0.50790
+model: ipcams_v32_yolo11m_608.onnx
+source_capture: 200338-peach_tree-rabbit.jpg

@@ -55,6 +55,16 @@ class Config(object):
         self.max_exclusion_area = section.getfloat("auto-exclude-max-area", 0.02)
         self.max_exclusions_per_camera = section.getint("auto-exclude-max-per-camera", 8)
         self.config_path = None
+        # A tap gets no answer from Home Assistant: a webhook automation
+        # returns an empty body whatever it does (verified against 2026.9.2
+        # with an automation that does nothing but stop with a literal
+        # response), so the `stop`/`response_variable` pair in
+        # aicam_roboflow_upload_webhook has never told anyone anything. The
+        # confirmation has to come from here instead, over the same Pushover
+        # account the alert came from.
+        self.pushover = None
+        if config.has_section("pushover") and self.notify_taps(config):
+            self.pushover = (config["pushover"]["token"], config["pushover"]["user"])
         # Build project routing: {class_name: [project_id, ...]}
         # Config keys like: project.ipcams2 = cat,dog,person
         self.projects = {}  # project_id -> set of classes
@@ -65,6 +75,10 @@ class Config(object):
                 self.projects[project_id] = classes
         if not self.projects:
             raise ValueError("No project.* keys found in [roboflow] config")
+
+    @staticmethod
+    def notify_taps(config):
+        return config["roboflow"].getboolean("notify-taps", True)
 
     def projects_for_tags(self, tags):
         """Return list of project IDs that cover any of the given tags."""
@@ -475,6 +489,51 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
     return (200, result)
 
 
+def tap_message(code, result, filename):
+    """One line saying what the tap did. Short: it lands on a lock screen."""
+    if code != 200:
+        return "%s: %s" % (os.path.basename(filename or "?"),
+                           result.get("error", "upload failed"))
+    verdict = result.get("verdict", "flag")
+    where = ", ".join(result.get("projects") or ()) or "nowhere"
+    if verdict == "correct":
+        return "Confirmed, added to %s" % where
+    if verdict == "false":
+        parts = []
+        if result.get("silenced"):
+            parts.append("silenced %s until the models change"
+                         % ", ".join(result["silenced"]))
+        if result.get("pending_exclusions"):
+            parts.append("held back %s, not silenced"
+                         % ", ".join(result["pending_exclusions"]))
+        if not parts:
+            parts.append("nothing to silence")
+        return "Marked false, %s in %s; %s" % ("background example", where,
+                                               "; ".join(parts))
+    return "Flagged for review, uploaded to %s" % where
+
+
+def announce(code, result, filename):
+    """Tell the phone what happened, quietly. Never worth failing the tap over."""
+    if not _config or not _config.pushover:
+        return
+    token, user = _config.pushover
+    data = urlencode({
+        "token": token, "user": user,
+        "title": "AICam review",
+        "message": tap_message(code, result, filename),
+        # -1 is a notification without a sound: this is an answer to something
+        # the person just did, not news.
+        "priority": -1,
+    }).encode("utf-8")
+    try:
+        req = Request("https://api.pushover.net/1/messages.json", data=data, method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        urlopen(req, timeout=10).read()
+    except Exception:
+        logger.warning("could not confirm the tap over Pushover", exc_info=True)
+
+
 _TITLES = {
     "flag": "Image Flagged for Review",
     "correct": "Detections Confirmed",
@@ -508,6 +567,7 @@ class UploadHandler(BaseHTTPRequestHandler):
         verdict = params.get("v", [None])[0]
 
         code, result = _do_upload(filename, model, cam, detection_tags, verdict)
+        announce(code, result, filename)
 
         if code == 200:
             title = _TITLES[result["verdict"]]
@@ -591,6 +651,7 @@ class UploadHandler(BaseHTTPRequestHandler):
             return
 
         code, result = _do_upload(filename, model, cam, detection_tags, verdict)
+        announce(code, result, filename)
         self._respond(code, result)
 
     def _respond(self, code, body):

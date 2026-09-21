@@ -201,10 +201,17 @@ does not recurse) with the reason written into the file:
 A second tap on the same spot is recognised (IoU > 0.5, the same threshold
 `detect.py` suppresses at) and does not write a second file.
 
-One gap: the webhook automation returns a canned `{"status": "uploaded"}`, so
-the phone does not say whether the spot was silenced or held back — the review
-log does. Fixing that is `response_variable: upload` on the rest_command action
-in `aicam_roboflow_upload_webhook`, returning `upload.content`.
+**A webhook automation cannot answer the phone.** Home Assistant returns an
+empty body for `/api/webhook/...` whatever the automation does — verified on
+2026.9.2 with a throwaway automation whose only action was `stop:` with a
+literal response: `Content-Length: 0`. So the `stop` / `response_variable` pair
+in `aicam_roboflow_upload_webhook` has never told anyone anything, and tapping
+a link has always opened a blank page. Do not spend another evening on it.
+
+The confirmation comes from the review server instead: it reads the same
+`config.txt` and sends its own quiet Pushover (priority -1) naming what
+happened — which spot was silenced, or which guard held it back, or why the
+upload failed. `notify-taps = false` in `[roboflow]` turns it off.
 
 Optional: `review.html` in this repo is the same three verdicts as buttons on a
 page. Copy it to Home Assistant's `/config/www/review.html` and set

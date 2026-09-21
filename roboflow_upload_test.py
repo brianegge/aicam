@@ -250,3 +250,52 @@ class TestServeImage:
 
     def test_a_traversal_is_a_basename(self):
         assert roboflow_upload.split_verdict("../../etc/passwd.jpg")[0] == "passwd.jpg"
+
+
+class TestTapConfirmation:
+    """The tap's only answer.
+
+    A Home Assistant webhook automation returns an empty body no matter what it
+    does -- checked on 2026.9.2 with an automation that does nothing but stop
+    with a literal response -- so the `stop`/`response_variable` pair in
+    aicam_roboflow_upload_webhook never told anyone anything and the phone has
+    always shown a blank page. This is the confirmation instead.
+    """
+
+    def test_a_silenced_spot_is_named(self, review, api):
+        msg = roboflow_upload.tap_message(200, {
+            "verdict": "false", "projects": ["ipcams2"],
+            "silenced": ["peach_tree-rabbit-11-22"]}, "abc123.jpg")
+        assert "silenced peach_tree-rabbit-11-22 until the models change" in msg
+
+    def test_a_guard_says_so_rather_than_claiming_silence(self, review, api):
+        """The failure worth hearing about: it uploaded but nothing went quiet."""
+        msg = roboflow_upload.tap_message(200, {
+            "verdict": "false", "projects": ["ipcams2"],
+            "pending_exclusions": ["peach_tree-deer-35-35"]}, "abc123.jpg")
+        assert "held back peach_tree-deer-35-35, not silenced" in msg
+        assert "silenced peach" not in msg
+
+    def test_an_error_carries_the_reason(self, review, api):
+        msg = roboflow_upload.tap_message(404, {"error": "file not found: abc123.jpg"},
+                                          "abc123.jpg")
+        assert msg == "abc123.jpg: file not found: abc123.jpg"
+
+    def test_a_confirmation_is_quiet(self, review, api):
+        roboflow_upload._config.pushover = ("tok", "usr")
+        with mock.patch.object(roboflow_upload, "urlopen") as sent:
+            roboflow_upload.announce(200, {"verdict": "flag", "projects": ["ipcams2"]},
+                                     "abc123.jpg")
+        body = sent.call_args[0][0].data.decode()
+        assert "priority=-1" in body and "token=tok" in body
+
+    def test_pushover_being_down_does_not_fail_the_tap(self, review, api):
+        roboflow_upload._config.pushover = ("tok", "usr")
+        with mock.patch.object(roboflow_upload, "urlopen", side_effect=OSError("nope")):
+            roboflow_upload.announce(200, {"verdict": "flag", "projects": []}, "a.jpg")
+
+    def test_nothing_is_sent_when_it_is_not_configured(self, review, api):
+        roboflow_upload._config.pushover = None
+        with mock.patch.object(roboflow_upload, "urlopen") as sent:
+            roboflow_upload.announce(200, {"verdict": "flag", "projects": []}, "a.jpg")
+        assert not sent.called

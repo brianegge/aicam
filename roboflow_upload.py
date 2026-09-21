@@ -9,6 +9,7 @@ Python 3.6 compatible (runs on Jetson Nano).
 import argparse
 import base64
 import datetime
+import glob
 import html
 import json
 import logging
@@ -29,6 +30,7 @@ except ImportError:
     from urllib import urlencode
 
 from excludes import slug as _slug
+from utils import bb_intersection_over_union
 
 logger = logging.getLogger("aicam-review")
 
@@ -40,11 +42,19 @@ class Config(object):
         self.delete_after_upload = section.getboolean("delete-after-upload", True)
         self.save_path = config["detector"]["save-path"]
         self.review_dir = os.path.join(self.save_path, "review")
-        # Candidate exclusions from an "all false" tap. A subdirectory, because
-        # excludes.load_dir globs *.yaml and does not recurse: nothing here is
-        # loaded until a human audits it and moves it up.
-        self.pending_dir = os.path.join(
-            config["detector"].get("excludes-dir", "excludes"), "pending")
+        # Exclusions written by an "all false" tap. Beside the captures, never
+        # in the checkout: `excludes/` is audited geometry under version
+        # control, and a deploy's `git stash -u` once swept every untracked
+        # file in the repo. aicam loads this directory too.
+        self.auto_dir = config["detector"].get(
+            "excludes-auto-dir", os.path.join(self.save_path, "excludes-auto"))
+        # Where a tap lands when a guard says the box is too big to silence, or
+        # the camera has too many already. load_dir globs *.yaml and does not
+        # recurse, so nothing here suppresses anything.
+        self.pending_dir = os.path.join(self.auto_dir, "pending")
+        self.max_exclusion_area = section.getfloat("auto-exclude-max-area", 0.02)
+        self.max_exclusions_per_camera = section.getint("auto-exclude-max-per-camera", 8)
+        self.config_path = None
         # Build project routing: {class_name: [project_id, ...]}
         # Config keys like: project.ipcams2 = cat,dog,person
         self.projects = {}  # project_id -> set of classes
@@ -196,39 +206,71 @@ def _or(value, fallback):
     return fallback if value is None or str(value).strip() in _MISSING else value
 
 
-def pending_exclusion(pending_dir, cam, filename, box, score, model, image_bytes):
-    """Park a candidate exclusion where nothing loads it.
+def current_models(config_path):
+    """Basenames of the models aicam is running, read fresh from config.txt.
 
-    `excludes.load_dir` globs `excludes/*.yaml` and does not recurse, so a file
-    here is inert until a human moves it up a directory. That gap is the point.
-    A real exclusion in this repo is not one frame's box -- deck-person-22-69
-    is the median of 21 archive hits, paired with the highest-scoring one so
-    `recheck_excludes.py` can ever answer STILL NEEDED. A tap on a phone cannot
-    produce that, and a too-generous box silently suppresses real detections
-    for as long as nobody notices.
+    Fresh, not from the parsed config this server started with: a model swap
+    restarts aicam, and if this process were still naming the old one every
+    exclusion it wrote would be stale on arrival -- ignored by the reader for
+    disagreeing with the running set, which is exactly the silence failing
+    closed in the one case the user is most likely to notice.
     """
+    if not config_path:
+        return []
+    cfg = ConfigParser()
+    cfg.read(config_path)
+    found = set()
+    for section in ("color-model", "grey-model", "vehicle-model"):
+        if cfg.has_option(section, "onnx"):
+            found.add(os.path.basename(cfg[section]["onnx"]))
+    return sorted(found)
+
+
+_PROVISIONAL_HEAD = """# PROVISIONAL -- written by an "all false" tap on %(created)s, from one frame.
+# It suppresses %(label)s at this spot right now, and stops the moment the
+# model set changes: the same tap uploaded the frame to Roboflow as a
+# background example, so the next retrain is what should make it unnecessary,
+# and excludes.load_dir drops this file as soon as the models it names are no
+# longer the ones running. If the false positive comes back after a retrain,
+# that is the honest answer -- tap it again.
+#
+# To make it permanent, audit the box against the capture archive by IoU, take
+# the median of the hits rather than this one box, pair it with the highest
+# scoring one, and move the pair into excludes/ without the provisional keys.
+"""
+
+_CANDIDATE_HEAD = """# CANDIDATE -- not loaded from here, and nothing is suppressed.
+# Flagged "all false" on %(created)s, then held back: %(why)s
+#
+# Audit it before moving it into excludes/, or delete it.
+"""
+
+
+def write_exclusion(directory, cam, filename, box, score, model, image_bytes,
+                    models=None, why=""):
+    """Write an exclusion pair -- geometry and the frame it came from.
+
+    With `models` it is provisional and live; without, it is a candidate in a
+    directory nothing reads. The frame travels either way: recheck_excludes.py
+    replays the paired jpg, and delete-after-upload is about to remove the
+    original.
+    """
+    label = box.get("label") or "object"
     stem = "%s-%s-%02d-%02d" % (
-        _slug(cam), _slug(box.get("label") or "object"),
+        _slug(cam), _slug(label),
         int((box["left"] + box["width"] / 2.0) * 100 + 0.5),
         int((box["top"] + box["height"] / 2.0) * 100 + 0.5))
     try:
-        os.makedirs(pending_dir)
+        os.makedirs(directory)
     except OSError:
         pass
-    doc = (
-        "# CANDIDATE -- not loaded from here. Flagged \"all false\" from a phone on\n"
-        "# %s, from a single frame and nothing else.\n"
-        "#\n"
-        "# Before moving this up into excludes/: audit the box against the capture\n"
-        "# archive by IoU, take the median of the hits rather than this one box,\n"
-        "# and pair it with the highest-scoring hit -- a pair whose own frame\n"
-        "# cannot reach the class threshold can never report STILL NEEDED.\n"
-        "# Then say in the comment what the object is and why the model cannot\n"
-        "# learn it. If it can learn it, the \"all false\" upload already did that\n"
-        "# and this file is not needed at all.\n"
+    created = datetime.date.today().isoformat()
+    head = (_PROVISIONAL_HEAD % {"created": created, "label": label} if models
+            else _CANDIDATE_HEAD % {"created": created, "why": why or "no reason given"})
+    doc = head + (
         "camera: %s\n"
         "label: %s\n"
-        "comment: flagged from a phone, unaudited\n"
+        "comment: %s\n"
         "box:\n"
         "  left: %.8f\n"
         "  top: %.8f\n"
@@ -242,19 +284,81 @@ def pending_exclusion(pending_dir, cam, filename, box, score, model, image_bytes
         "model: %s\n"
         "source_review: %s\n"
     ) % (
-        datetime.date.today().isoformat(),
-        cam, box.get("label") or "object",
+        cam, label,
+        "flagged false from a phone %s" % created if models
+        else "flagged false from a phone %s, unaudited" % created,
         box["left"], box["top"], box["width"], box["height"],
         box["left"] + box["width"] / 2.0, box["top"] + box["height"] / 2.0,
-        datetime.date.today().isoformat(), score or 0.0, model, filename,
+        created, score or 0.0, model, filename,
     )
-    with open(os.path.join(pending_dir, stem + ".yaml"), "w") as f:
+    if models:
+        doc += "provisional: true\nmodels:\n"
+        for m in models:
+            doc += "  - %s\n" % m
+    with open(os.path.join(directory, stem + ".yaml"), "w") as f:
         f.write(doc)
-    # The frame travels with the geometry: recheck_excludes.py replays the
-    # paired jpg, and delete-after-upload is about to remove the original.
-    with open(os.path.join(pending_dir, stem + ".jpg"), "wb") as f:
+    with open(os.path.join(directory, stem + ".jpg"), "wb") as f:
         f.write(image_bytes)
     return stem
+
+
+def already_silenced(directory, cam, box):
+    """True if a live exclusion here already covers this box for this label.
+
+    detect.py suppresses at IoU > 0.5, so anything above that is the same spot
+    and a second file would only be another name for it.
+    """
+    try:
+        import yaml
+    except ImportError:
+        return False
+    for fn in glob.glob(os.path.join(directory, "*.yaml")):
+        try:
+            with open(fn) as f:
+                doc = yaml.safe_load(f) or {}
+            if doc.get("camera") != cam or doc.get("label") != box.get("label"):
+                continue
+            if bb_intersection_over_union(
+                    {k: float(doc["box"][k]) for k in ("left", "top", "width", "height")},
+                    box) > 0.5:
+                return os.path.basename(fn)
+        except Exception:
+            continue
+    return None
+
+
+def silence(cam, filename, box, model, image_bytes):
+    """Act on "all false": stop this false positive firing, or say why not.
+
+    Returns (stem, live) -- live is False when a guard sent it to pending/
+    instead. The guards are the whole reason this is not just a file write. An
+    exclusion is a blind spot, and one tap is one frame of evidence: a box
+    covering a quarter of the frame, or the ninth on one camera, is more likely
+    a detector having a bad day than a rock, and silencing it would cost real
+    detections that nobody would notice going missing.
+    """
+    area = float(box.get("width", 0)) * float(box.get("height", 0))
+    if area > _config.max_exclusion_area:
+        return (write_exclusion(
+            _config.pending_dir, cam, filename, box, box.get("probability"),
+            model, image_bytes,
+            why="the box covers %.1f%% of the frame, over the %.1f%% a tap may silence"
+                % (area * 100, _config.max_exclusion_area * 100)), False)
+    existing = already_silenced(_config.auto_dir, cam, box)
+    if existing:
+        logger.info("%s on %s is already silenced by %s", box.get("label"), cam, existing)
+        return (os.path.splitext(existing)[0], True)
+    mine = [fn for fn in glob.glob(os.path.join(_config.auto_dir, "*.yaml"))
+            if os.path.basename(fn).startswith(_slug(cam) + "-")]
+    if len(mine) >= _config.max_exclusions_per_camera:
+        return (write_exclusion(
+            _config.pending_dir, cam, filename, box, box.get("probability"),
+            model, image_bytes,
+            why="%s already has %d silenced spots, the most a tap may add"
+                % (cam, len(mine))), False)
+    return (write_exclusion(
+        _config.auto_dir, cam, filename, box, box.get("probability"), model,
+        image_bytes, models=current_models(_config.config_path)), True)
 
 
 def _do_upload(filename, model, cam, detection_tags, verdict=None):
@@ -334,15 +438,19 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
     if not uploaded:
         return (502, {"error": "all uploads failed"})
 
-    pending = []
+    silenced, pending = [], []
     if verdict == "false":
         for box in sidecar.get("boxes") or ():
             try:
-                pending.append(pending_exclusion(
-                    _config.pending_dir, cam, filename, box,
-                    box.get("probability"), model, image_data))
+                stem, live = silence(cam, filename, box, model, image_data)
             except Exception:
-                logger.exception("could not write a candidate exclusion for %s", filename)
+                logger.exception("could not silence %s on %s", box.get("label"), cam)
+                continue
+            (silenced if live else pending).append(stem)
+        if silenced:
+            logger.info("%s: silenced %s until the models change", cam, ", ".join(silenced))
+        if pending:
+            logger.info("%s: held back %s, see the file for why", cam, ", ".join(pending))
 
     if _config.delete_after_upload:
         try:
@@ -360,6 +468,8 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
               "verdict": verdict}
     if annotated:
         result["annotated"] = annotated
+    if silenced:
+        result["silenced"] = silenced
     if pending:
         result["pending_exclusions"] = pending
     return (200, result)
@@ -410,9 +520,11 @@ class UploadHandler(BaseHTTPRequestHandler):
                 body += "<p>Annotated with the boxes from the alert.</p>"
             elif result["verdict"] == "false":
                 body += "<p>Annotated with no boxes, so it trains as background.</p>"
+                if result.get("silenced"):
+                    body += "<p>Silenced until the model changes: %s</p>" % (
+                        html.escape(", ".join(result["silenced"])))
                 if result.get("pending_exclusions"):
-                    body += "<p>Candidate exclusion%s parked for review: %s</p>" % (
-                        "" if len(result["pending_exclusions"]) == 1 else "s",
+                    body += "<p>Held back for review, not silenced: %s</p>" % (
                         html.escape(", ".join(result["pending_exclusions"])))
         else:
             title = "Upload Failed"
@@ -515,6 +627,7 @@ def main():
         sys.exit(1)
 
     _config = Config(config)
+    _config.config_path = args.config
     os.makedirs(_config.review_dir, exist_ok=True)
 
     server = HTTPServer(("", args.port), UploadHandler)

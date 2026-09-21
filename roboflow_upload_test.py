@@ -19,6 +19,21 @@ import pytest
 import roboflow_upload
 
 
+def _load_yaml(path):
+    import yaml
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+def _rewrite_boxes(review_dir, boxes):
+    """Replace the sidecar's boxes, keeping everything else."""
+    path = str(review_dir / "abc123.json")
+    doc = json.load(open(path))
+    doc["boxes"] = boxes
+    with open(path, "w") as f:
+        json.dump(doc, f)
+
+
 @pytest.fixture
 def review(tmp_path):
     """A configured server with one frame and its sidecar on disk."""
@@ -28,16 +43,27 @@ def review(tmp_path):
     (save / "review" / "abc123.json").write_text(json.dumps({
         "file": "abc123.jpg", "cam": "peach tree", "model": "ipcams",
         "tags": ["deer"], "width": 2688, "height": 1520,
+        # A rock's worth of frame: 0.06% of it. The size guard exists because
+        # a tap may only silence something this small.
         "boxes": [{"label": "deer", "left": 0.1, "top": 0.2,
-                   "width": 0.3, "height": 0.4, "probability": 0.72}],
+                   "width": 0.02, "height": 0.03, "probability": 0.72}],
     }))
     cfg = ConfigParser()
     cfg.read_dict({
-        "detector": {"save-path": str(save), "excludes-dir": str(tmp_path / "excludes")},
+        "detector": {"save-path": str(save),
+                     "excludes-dir": str(tmp_path / "excludes"),
+                     "excludes-auto-dir": str(tmp_path / "excludes-auto")},
+        "color-model": {"onnx": "/models/ipcams_v32.onnx"},
+        "vehicle-model": {"onnx": "/models/packages_v11.onnx"},
         "roboflow": {"api-key": "k", "delete-after-upload": "false",
                      "project.ipcams2": "deer,person", "project.pv2": "package,vehicle"},
     })
-    with mock.patch.object(roboflow_upload, "_config", roboflow_upload.Config(cfg)):
+    config_path = tmp_path / "config.txt"
+    with open(str(config_path), "w") as f:
+        cfg.write(f)
+    conf = roboflow_upload.Config(cfg)
+    conf.config_path = str(config_path)
+    with mock.patch.object(roboflow_upload, "_config", conf):
         yield save / "review"
 
 
@@ -79,7 +105,7 @@ class TestVerdicts:
         assert code == 200 and result["verdict"] == "correct"
         _, _, _, _, width, height, boxes = api["annotate"].call_args[0]
         assert (width, height) == (2688, 1520)
-        assert boxes == [("deer", 0.1, 0.2, 0.3, 0.4)]
+        assert boxes == [("deer", 0.1, 0.2, 0.02, 0.03)]
         assert not api["null"].called
 
     def test_false_annotates_with_no_boxes_at_all(self, review, api):
@@ -114,34 +140,100 @@ class TestVerdicts:
         assert code == 404 and not api["upload"].called
 
 
-class TestPendingExclusions:
-    def test_false_parks_a_candidate_exclusion_no_one_loads(self, review, api):
+class TestSilencing:
+    """"All false" has to stop the false positive, not just file a note.
+
+    A rock called a rabbit goes on being a rabbit every three seconds until
+    something suppresses it, so the tap writes a live exclusion. What keeps
+    that from being reckless is that it expires on its own: the file names the
+    models it was written against, and excludes.load_dir drops it the moment
+    that set changes.
+    """
+
+    def test_false_silences_the_spot_now(self, review, api):
+        code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        auto = roboflow_upload._config.auto_dir
+        assert result["silenced"] == ["peach_tree-deer-11-22"]
+        assert sorted(os.listdir(auto)) == ["peach_tree-deer-11-22.jpg",
+                                            "peach_tree-deer-11-22.yaml"]
+
+    def test_the_exclusion_names_the_models_it_was_written_against(self, review, api):
         roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
-        pending = os.path.join(roboflow_upload._config.pending_dir)
-        assert sorted(os.listdir(pending)) == ["peach_tree-deer-25-40.jpg",
-                                               "peach_tree-deer-25-40.yaml"]
-        doc = open(os.path.join(pending, "peach_tree-deer-25-40.yaml")).read()
-        assert "camera: peach tree" in doc and "label: deer" in doc
-        assert "left: 0.10000000" in doc
-        assert "CANDIDATE" in doc
+        doc = _load_yaml(os.path.join(roboflow_upload._config.auto_dir,
+                                      "peach_tree-deer-11-22.yaml"))
+        assert doc["provisional"] is True
+        assert sorted(doc["models"]) == ["ipcams_v32.onnx", "packages_v11.onnx"]
+        assert doc["camera"] == "peach tree" and doc["label"] == "deer"
+        assert doc["box"]["left"] == 0.1
+
+    def test_a_live_exclusion_is_loaded_and_survives_its_own_models(self, review, api):
+        import excludes
+        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        loaded = excludes.load_dir(roboflow_upload._config.auto_dir,
+                                   ["ipcams_v32.onnx", "packages_v11.onnx"])
+        assert loaded["peach tree"]["deer"][0]["left"] == 0.1
+
+    def test_a_retrain_puts_the_blind_spot_back_on_trial(self, review, api):
+        """The whole expiry rule: a new model set means it stops applying."""
+        import excludes
+        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        assert excludes.load_dir(roboflow_upload._config.auto_dir,
+                                 ["ipcams_v33.onnx", "packages_v11.onnx"]) == {}
 
     def test_the_frame_is_paired_with_the_geometry(self, review, api):
         """recheck_excludes.py replays the jpg; delete-after-upload eats the original."""
         roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
-        pending = roboflow_upload._config.pending_dir
-        assert open(os.path.join(pending, "peach_tree-deer-25-40.jpg"), "rb").read() \
+        assert open(os.path.join(roboflow_upload._config.auto_dir,
+                                 "peach_tree-deer-11-22.jpg"), "rb").read() \
             == b"\xff\xd8jpegbytes"
 
-    def test_nothing_is_parked_for_the_other_verdicts(self, review, api):
+    def test_nothing_is_silenced_by_the_other_verdicts(self, review, api):
         roboflow_upload._do_upload("abc123.jpg|correct", "", "", set())
         roboflow_upload._do_upload("abc123.jpg", "", "", set())
-        assert not os.path.isdir(roboflow_upload._config.pending_dir)
+        assert not os.path.isdir(roboflow_upload._config.auto_dir)
 
-    def test_a_candidate_is_not_loaded_as_an_exclusion(self, review, api):
-        """The whole reason it goes in a subdirectory: load_dir does not recurse."""
-        import excludes
+    def test_the_same_spot_twice_is_one_exclusion(self, review, api):
         roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
-        assert excludes.load_dir(os.path.dirname(roboflow_upload._config.pending_dir)) == {}
+        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        yamls = [f for f in os.listdir(roboflow_upload._config.auto_dir)
+                 if f.endswith(".yaml")]
+        assert yamls == ["peach_tree-deer-11-22.yaml"]
+
+
+class TestSilencingGuards:
+    """One tap is one frame of evidence, and an exclusion is a blind spot."""
+
+    def test_a_box_too_big_to_silence_is_held_back(self, review, api):
+        _rewrite_boxes(review, [{"label": "deer", "left": 0.1, "top": 0.1,
+                                 "width": 0.5, "height": 0.5, "probability": 0.6}])
+        code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        assert not result.get("silenced")
+        assert result["pending_exclusions"] == ["peach_tree-deer-35-35"]
+        assert not os.path.isdir(roboflow_upload._config.auto_dir) or \
+            [f for f in os.listdir(roboflow_upload._config.auto_dir)
+             if f.endswith(".yaml")] == []
+        doc = open(os.path.join(roboflow_upload._config.pending_dir,
+                                "peach_tree-deer-35-35.yaml")).read()
+        assert "25.0% of the frame" in doc and "provisional" not in doc
+
+    def test_a_held_back_candidate_suppresses_nothing(self, review, api):
+        import excludes
+        _rewrite_boxes(review, [{"label": "deer", "left": 0.1, "top": 0.1,
+                                 "width": 0.5, "height": 0.5, "probability": 0.6}])
+        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        # pending/ is a subdirectory and load_dir does not recurse.
+        assert excludes.load_dir(roboflow_upload._config.auto_dir, ["ipcams_v32.onnx"]) == {}
+
+    def test_a_camera_may_only_collect_so_many(self, review, api):
+        roboflow_upload._config.max_exclusions_per_camera = 1
+        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        _rewrite_boxes(review, [{"label": "deer", "left": 0.8, "top": 0.8,
+                                 "width": 0.05, "height": 0.05, "probability": 0.6}])
+        code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        assert result["pending_exclusions"] == ["peach_tree-deer-83-83"]
+        doc = open(os.path.join(roboflow_upload._config.pending_dir,
+                                "peach_tree-deer-83-83.yaml")).read()
+        assert "already has 1 silenced spots" in doc
 
 
 class TestCleanup:

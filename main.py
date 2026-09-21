@@ -23,6 +23,7 @@ import sdnotify
 
 from camera import Camera, set_model_input_sizes
 from excludes import load as load_excludes
+from excludes import signature as exclude_signature
 from detect import detect
 from frigate_lpr import frigate_camera_name
 from homeassistant import HomeAssistant
@@ -35,6 +36,21 @@ kill_now: bool = False
 
 DEVICE_ID = "aicam"
 DEVICE_NAME = "AI Camera Detector"
+
+
+# How long a false positive keeps firing after the tap that silenced it. One
+# sweep is ~3 s, so this is a handful of frames, and the check is a stat of a
+# dozen small files.
+EXCLUDES_RELOAD_SECONDS = 10
+
+
+def model_files(config):
+    """Basenames of the model files aicam is running right now."""
+    found = set()
+    for section in ("color-model", "grey-model", "vehicle-model"):
+        if config.has_section(section) and config.has_option(section, "onnx"):
+            found.add(os.path.basename(config[section]["onnx"]))
+    return sorted(found)
 
 
 def get_version() -> str:
@@ -412,10 +428,20 @@ async def main(options: argparse.Namespace) -> None:
     # is a yaml paired with the frame that caused it. The pair is what makes an
     # exclusion reviewable -- recheck_excludes.py replays those frames through
     # the current model and says which are no longer needed.
-    excludes = load_excludes(
-        detector_config.get("excludes-file"),
-        detector_config.get("excludes-dir", "excludes"),
-    )
+    # The models are part of it: a provisional exclusion written from a phone
+    # tap names the model set it was created against and stops applying when
+    # that changes, so a retrain automatically puts the blind spot back on
+    # trial. The auto dir is outside the checkout on purpose -- a deploy's
+    # `git stash -u` once swept every untracked file in it.
+    models = model_files(config)
+    excludes_file = detector_config.get("excludes-file")
+    excludes_dir = detector_config.get("excludes-dir", "excludes")
+    excludes_auto_dir = detector_config.get(
+        "excludes-auto-dir",
+        os.path.join(detector_config["save-path"], "excludes-auto"))
+    excludes = load_excludes(excludes_file, excludes_dir, excludes_auto_dir, models)
+    excludes_sig = exclude_signature(excludes_dir, excludes_auto_dir)
+    excludes_checked = 0.0
     # make dirs
     static_dir = os.path.join(config["detector"]["save-path"], "static")
     pathlib.Path(static_dir).mkdir(parents=True, exist_ok=True)
@@ -487,6 +513,19 @@ async def main(options: argparse.Namespace) -> None:
     global kill_now
     while not kill_now:
         sd.notify("WATCHDOG=1")
+        # A tap on a phone can write an exclusion while this is running, and
+        # "silence it" has to mean now rather than at the next restart.
+        if time.monotonic() - excludes_checked > EXCLUDES_RELOAD_SECONDS:
+            excludes_checked = time.monotonic()
+            current = exclude_signature(excludes_dir, excludes_auto_dir)
+            if current != excludes_sig:
+                excludes_sig = current
+                excludes = load_excludes(excludes_file, excludes_dir,
+                                         excludes_auto_dir, models)
+                for cam in cams:
+                    cam.excludes = excludes.get(cam.name, {})
+                log.info("reloaded exclusions: %d now in force",
+                         sum(len(b) for l in excludes.values() for b in l.values()))
         if mqtt_client._reconnect_deadline is not None:
             if time.monotonic() > mqtt_client._reconnect_deadline:
                 log.error("MQTT reconnect failed after 5 minutes, shutting down")

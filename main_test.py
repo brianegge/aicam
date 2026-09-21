@@ -93,3 +93,23 @@ def test_repeat_motion_while_pending_is_idempotent():
     for _ in range(5):
         main._handle_frigate_motion(client, "peach_tree", b"ON")
     assert cam.motion_pending is True
+
+
+def test_model_files_names_what_is_actually_running(tmp_path):
+    """A provisional exclusion expires against this set, so it has to be right."""
+    from configparser import ConfigParser
+    config = ConfigParser()
+    config.read_dict({
+        "color-model": {"onnx": "/Users/claw/aicam-models/ipcams_v32_yolo11m_608.onnx"},
+        "vehicle-model": {"onnx": "/Users/claw/aicam-models/packages_vehicles_yolo11s.onnx"},
+    })
+    assert main.model_files(config) == ["ipcams_v32_yolo11m_608.onnx",
+                                        "packages_vehicles_yolo11s.onnx"]
+
+
+def test_model_files_copes_with_no_grey_model():
+    """There has been no [grey-model] since 2026-09-11."""
+    from configparser import ConfigParser
+    config = ConfigParser()
+    config.read_dict({"color-model": {"onnx": "a.onnx"}})
+    assert main.model_files(config) == ["a.onnx"]

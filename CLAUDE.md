@@ -152,7 +152,7 @@ Three verdicts, since 2026-09-20:
 |-----|---------|
 | Flag for Review | uploaded unannotated, to be labelled by hand |
 | ✓ All correct | uploaded and annotated with the boxes from the alert |
-| ✗ All false | uploaded with a zero-box VOC annotation (background), and a candidate exclusion parked in `excludes/pending/` |
+| ✗ All false | uploaded with a zero-box VOC annotation (background), **and the spot silenced** until the model changes — see below |
 
 Pushover allows **one** `url` per message, so "all correct" and "all false" are
 `<a href>` links in the message body (`html=1`) and the supplementary link
@@ -164,10 +164,47 @@ upload needs (boxes, frame size, camera, model) is in
 `review/<id>.json`, written by `notify.write_sidecar` beside the frame: a
 Pushover url is capped at 512 chars and the webhook forwards four fixed fields.
 
-`excludes/pending/` is not loaded — `excludes.load_dir` globs `excludes/*.yaml`
-and does not recurse. A candidate is one frame's box; a real exclusion here is
-the median of an archive audit (see `excludes/deck-person-22-69.yaml`), so it
-stays inert until someone does that work.
+### Silencing a false positive from the phone
+
+"All false" also **stops it firing**, which is the point: a rock called a
+rabbit is a rabbit again three seconds later. The tap writes a live exclusion
+pair into `~/aicam-data/excludes-auto/` (config `excludes-auto-dir`) — never
+into the checkout, because a deploy's `git stash -u` once swept every untracked
+file in it. `main.py` re-reads both directories when any `*.yaml` mtime changes
+(`EXCLUDES_RELOAD_SECONDS`, 10 s), so the silence takes effect within a sweep
+instead of at the next restart.
+
+It expires by itself. The file carries `provisional: true` and the `models:`
+it was written against, and `excludes.load_dir` drops it as soon as
+`config.txt` names a different model set — the same tap uploaded the frame to
+Roboflow as a background example, so a retrain is what should have made it
+unnecessary, and the retrain is what puts the blind spot back on trial. After
+one:
+
+```bash
+ssh openclaw.home "cd ~/aicam && .venv/bin/python recheck_excludes.py \
+    --config config.txt --dir ~/aicam-data/excludes-auto"
+```
+
+STILL NEEDED means audit it properly and move the pair into `excludes/` without
+the provisional keys. If the false positive simply comes back, that is the
+honest answer and it costs one more tap.
+
+Two guards, both landing in `excludes-auto/pending/` (not loaded — `load_dir`
+does not recurse) with the reason written into the file:
+
+- `auto-exclude-max-area` (default 0.02) — a box over 2% of the frame is more
+  likely a detector having a bad day than a rock, and silencing it would cost
+  real detections nobody would notice going missing.
+- `auto-exclude-max-per-camera` (default 8).
+
+A second tap on the same spot is recognised (IoU > 0.5, the same threshold
+`detect.py` suppresses at) and does not write a second file.
+
+One gap: the webhook automation returns a canned `{"status": "uploaded"}`, so
+the phone does not say whether the spot was silenced or held back — the review
+log does. Fixing that is `response_variable: upload` on the rest_command action
+in `aicam_roboflow_upload_webhook`, returning `upload.content`.
 
 Optional: `review.html` in this repo is the same three verdicts as buttons on a
 page. Copy it to Home Assistant's `/config/www/review.html` and set

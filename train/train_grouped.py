@@ -17,7 +17,7 @@ from tensorflow.keras import layers, models, optimizers
 from tensorflow.keras.applications import MobileNetV2
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
-ROOT=os.path.expanduser('~/train/crops-grouped')
+ROOT=os.path.expanduser(os.environ.get('CROPS_DIR','~/train/crops-grouped'))
 OUT =os.path.expanduser(os.environ.get('OUT_DIR','~/train/ipcams-clf-grouped'))
 DEER_WEIGHT=float(os.environ.get('DEER_WEIGHT','2.0'))
 HEAD_EPOCHS=int(os.environ.get('HEAD_EPOCHS','8'))

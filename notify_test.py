@@ -220,3 +220,47 @@ class TestNothingToJudge:
         """
         assert _review_post([_cat(ignore="mulch bed rock")], "cat in garage",
                             tmp_path) is None
+
+
+class TestReviewPage:
+    """One link to a page, instead of two links in the message.
+
+    Three vehicle alerts arrived within a second of each other on 2026-09-21
+    and each spent two lines of its lock-screen preview on "All correct / All
+    false" -- markup where the picture should be. With review-page-url set the
+    verdicts move to a page and the notification carries one supplementary
+    link, which Pushover shows as a row rather than body text.
+    """
+
+    PAGE = "https://example.ui.nabu.casa/local/review.html"
+
+    def _with_page(self, tmp_path, predictions=None):
+        from PIL import Image
+        ha = _ha()
+        ha.vacation_mode.return_value = False
+        c = _config(tmp_path)
+        c["pushover"] = {"token": "t", "user": "u"}
+        c["roboflow"] = {"webhook-url": "https://example.ui.nabu.casa/api/webhook/aicam",
+                         "review-page-url": self.PAGE}
+        cam = mock.Mock()
+        cam.name = "garage right"
+        cam.road_line = None
+        with mock.patch.object(notify.requests, "post") as post:
+            notify.notify(cam, "vehicle 97% in front of right garage",
+                          Image.new("RGB", (1920, 1080), (40, 40, 40)),
+                          predictions or [_cat()], c, ha)
+        return post.call_args[1]["data"]
+
+    def test_the_message_carries_no_markup(self, tmp_path):
+        data = self._with_page(tmp_path)
+        assert "<a href=" not in data["message"]
+        assert "html" not in data
+
+    def test_the_one_link_goes_to_the_page(self, tmp_path):
+        data = self._with_page(tmp_path)
+        assert data["url"].startswith(self.PAGE + "?")
+        assert "file=" in data["url"] and "cam=garage_right" in data["url"]
+        assert data["url_title"] == "Review Detection"
+
+    def test_the_page_link_fits_pushovers_limit(self, tmp_path):
+        assert len(self._with_page(tmp_path)["url"]) <= 512

@@ -1,23 +1,28 @@
 <!DOCTYPE html>
 <!--
-  One link in a Pushover alert, three verdicts on a page.
+  One link in an aicam alert, three verdicts on a page.
 
-  Install: copy to Home Assistant's /config/www/review.html (File editor,
-  Studio Code Server or Samba -- there is no API for it), then set in aicam's
-  config.txt:
+  Lives in Home Assistant's /config/www, served at /local/review.html, which
+  is the only externally reachable static hosting here: claw-mini sits on the
+  isolated OpenClaw subnet and cannot be reached from outside. aicam points at
+  it with review-page-url in [roboflow]; without that it falls back to putting
+  the verdicts in the message as links, which is what this replaces -- three
+  alerts in a row each carrying "All correct / All false" filled the lock
+  screen with markup instead of pictures.
 
-      [roboflow]
-      review-page-url = https://<your-nabu-casa-host>/local/review.html
+  The buttons call the same webhook the links did, on the origin this page was
+  served from, so it works locally and through the Nabu Casa URL with no second
+  hostname to keep in sync.
 
-  and restart aicam. Until then notify.py puts the verdicts in the message as
-  links instead.
+  Two things it deliberately does not do. It shows no picture: the alert that
+  sent you here already had one, and the frame lives on a host this page cannot
+  reach. And it does not report the outcome, because a Home Assistant webhook
+  automation answers with an empty body no matter what it does (checked on
+  2026.9.2) -- the review server sends its own Pushover saying what happened.
 
-  Nothing here knows an API key or a camera password: the buttons call the same
-  Home Assistant webhook the links do, on the origin this page was served from,
-  so it works locally and through the Nabu Casa URL with no second hostname to
-  keep in sync. Files under /config/www are served without authentication --
-  this page is only as private as the review id in its query string, which is
-  also true of the links it replaces.
+  Files under /config/www are served without authentication, so this page is
+  only as private as the review id in its query string. That was already true
+  of the links it replaces.
 -->
 <html lang="en">
 <head>
@@ -25,49 +30,66 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AICam Review</title>
 <style>
- body{font-family:system-ui,sans-serif;max-width:520px;margin:24px auto;padding:0 16px;
-      background:#111;color:#eee}
- img{width:100%;border-radius:8px;margin-bottom:16px}
- button{display:block;width:100%;padding:16px;margin:8px 0;font-size:17px;
-        border:0;border-radius:8px;color:#fff}
- .correct{background:#16a34a}.false{background:#dc2626}.flag{background:#525252}
- button[disabled]{opacity:.45}
- #out{margin-top:16px;white-space:pre-wrap;font-size:14px;color:#aaa}
- h2{font-size:18px;font-weight:600}
+ :root { color-scheme: dark; }
+ body{font-family:-apple-system,system-ui,sans-serif;max-width:520px;
+      margin:0 auto;padding:24px 16px 40px;background:#111;color:#eee}
+ h1{font-size:20px;font-weight:600;margin:0 0 4px}
+ .sub{color:#999;font-size:14px;margin:0 0 24px}
+ button{display:block;width:100%;padding:18px;margin:10px 0;font-size:17px;
+        font-weight:600;border:0;border-radius:12px;color:#fff;
+        -webkit-tap-highlight-color:transparent}
+ .correct{background:#16a34a}
+ .false{background:#dc2626}
+ .flag{background:#4b5563}
+ button:disabled{opacity:.4}
+ .note{color:#888;font-size:13px;margin:4px 2px 18px;line-height:1.4}
+ #out{margin-top:20px;padding:14px;border-radius:10px;background:#1c1c1e;
+      font-size:15px;color:#ddd;display:none}
 </style>
 </head>
 <body>
-<h2 id="what">Review</h2>
-<img id="frame" alt="" hidden>
+<h1 id="what">Review detection</h1>
+<p class="sub" id="which"></p>
+
 <button class="correct" data-v="correct">&#10003; All detections correct</button>
-<button class="false"   data-v="false">&#10007; All detections false</button>
-<button class="flag"    data-v="flag">Flag for review</button>
+<p class="note">Adds the frame to the training set with the boxes from the alert.</p>
+
+<button class="false" data-v="false">&#10007; All detections false</button>
+<p class="note">Adds it as a background example and silences that spot until the
+model is retrained.</p>
+
+<button class="flag" data-v="flag">Flag for review</button>
+<p class="note">Uploads it unlabelled, to sort out later.</p>
+
 <div id="out"></div>
+
 <script>
  var q = new URLSearchParams(location.search);
  var file = q.get("file") || "";
  var cam = (q.get("cam") || "").replace(/_/g, " ");
- document.getElementById("what").textContent = cam ? cam + " — " + file : file;
-
- // Only reachable on the home network: claw-mini sits on the isolated OpenClaw
- // subnet, and this page is https when it comes through Nabu Casa. Hidden
- // unless it loads.
- var img = document.getElementById("frame");
- img.onload = function () { img.hidden = false; };
- if (file) img.src = "http://openclaw.home:5050/image?file=" + encodeURIComponent(file);
+ document.getElementById("which").textContent =
+   (cam ? cam + " · " : "") + (file || "no frame given");
 
  var out = document.getElementById("out");
+ function say(text) { out.textContent = text; out.style.display = "block"; }
+
  function vote(verdict) {
+   if (!file) { say("No frame in the link, so there is nothing to judge."); return; }
    var buttons = document.querySelectorAll("button");
    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
-   out.textContent = "Sending…";
+   say("Sending…");
    var name = verdict === "flag" ? file : file + "|" + verdict;
    fetch(location.origin + "/api/webhook/aicam_roboflow_review?file="
          + encodeURIComponent(name))
-     .then(function (r) { return r.text(); })
-     .then(function (t) { out.textContent = t || "Sent."; })
+     .then(function (r) {
+       // The webhook always answers 200 with an empty body; what actually
+       // happened arrives as the review server's own notification.
+       say(r.ok ? "Sent. The confirmation will arrive as a notification."
+                : "Home Assistant answered " + r.status + ".");
+       if (!r.ok) for (var i = 0; i < buttons.length; i++) buttons[i].disabled = false;
+     })
      .catch(function (e) {
-       out.textContent = "Failed: " + e;
+       say("Could not reach Home Assistant: " + e);
        for (var i = 0; i < buttons.length; i++) buttons[i].disabled = false;
      });
  }

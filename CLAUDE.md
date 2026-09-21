@@ -168,7 +168,7 @@ Pushover url is capped at 512 chars and the webhook forwards four fixed fields.
 
 "All false" also **stops it firing**, which is the point: a rock called a
 rabbit is a rabbit again three seconds later. The tap writes a live exclusion
-pair into `~/aicam-data/excludes-auto/` (config `excludes-auto-dir`) — never
+pair into `~/aicam-data/capture/excludes-auto/` (config `excludes-auto-dir`, default `<save-path>/excludes-auto`) — never
 into the checkout, because a deploy's `git stash -u` once swept every untracked
 file in it. `main.py` re-reads both directories when any `*.yaml` mtime changes
 (`EXCLUDES_RELOAD_SECONDS`, 10 s), so the silence takes effect within a sweep
@@ -183,7 +183,7 @@ one:
 
 ```bash
 ssh openclaw.home "cd ~/aicam && .venv/bin/python recheck_excludes.py \
-    --config config.txt --dir ~/aicam-data/excludes-auto"
+    --config config.txt --dir ~/aicam-data/capture/excludes-auto"
 ```
 
 STILL NEEDED means audit it properly and move the pair into `excludes/` without

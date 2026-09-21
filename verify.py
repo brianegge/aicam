@@ -107,6 +107,42 @@ PROMPT = (
     "that is none of the listed ones."
 )
 
+# Couriers, enumerated for the same reason the animal labels are: "the Amazon
+# lady", "a delivery guy" and "UPS" all have to be matched back onto one thing,
+# and the model is steadier when the answers are listed.
+#
+# This costs no extra request. Every person detection already sends the crop
+# and pays for the image; the reply was being collapsed to "person 0.99" and
+# the rest discarded. The added field is about twenty completion tokens.
+#
+# Asked about the person class only, and read only when the model agrees the
+# box holds a person -- a courier verdict on a crop the model called "nothing"
+# is an answer about an object that is not there.
+COURIERS = ["amazon", "ups", "fedex", "usps", "other", "none"]
+
+# The uniform is the evidence, not the errand. A resident carrying shopping in
+# from the car is not a courier and neither is a neighbour, so "none" has to be
+# an easy answer -- otherwise every person holding anything becomes a delivery.
+# Same failure the classifier's "none" class exists to prevent, and the reason
+# a visible service marking is named as the thing to look for rather than
+# "does this look like a delivery".
+#
+# The last sentence is load-bearing and was added after measuring. Without it
+# the extra question drags the label's own confidence down -- the same crop of
+# a real Amazon driver scored person 0.99 twice without it and person 0.80
+# twice with it. That number is not cosmetic: "nothing" on a person is held to
+# NOTHING_FLOOR_STRICT, and 31 of the 178 person->nothing verdicts in the log
+# clear 0.95 while the median is 0.75, so a 0.19 shift would put most of the
+# suppressed lawn chairs and patio boxes back into the alert stream.
+COURIER_PROMPT = (
+    ' Also include "courier": one of [%s] -- which delivery service this '
+    "person works for, judged from a uniform, vest, logo or handheld scanner. "
+    'Use "none" unless a service is actually visible on them; carrying a '
+    'parcel is not on its own enough. Use "other" for a service not listed. '
+    '"confidence" still refers to "label" alone -- it is not lowered by any '
+    "uncertainty about the courier."
+)
+
 # Told to the model when other things are detected in the same frame. Two
 # separate problems, one fix.
 #
@@ -301,12 +337,16 @@ def _crop(image, box, context, max_edge, min_window=400):
     return buf.getvalue()
 
 
-def ask(image_bytes, tag, cfg, others=()):
+def ask(image_bytes, tag, cfg, others=(), courier=False):
     """The model's verdict, or None if it could not be obtained.
 
     others names the classes detected elsewhere in the same frame.
+    courier adds the delivery-service question; see COURIER_PROMPT.
     """
     context = FRAME_CONTEXT % ", ".join(sorted(others)) if others else ""
+    prompt = PROMPT % (tag, context, ", ".join(LABELS))
+    if courier:
+        prompt += COURIER_PROMPT % ", ".join(COURIERS)
     body = {
         "model": cfg.get("model", "google/gemini-3.8-flash"),
         # Generous, because the reasoning tokens are charged against this
@@ -317,7 +357,7 @@ def ask(image_bytes, tag, cfg, others=()):
         # Removes the ```json fences rather than stripping them afterwards.
         "response_format": {"type": "json_object"},
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": PROMPT % (tag, context, ", ".join(LABELS))},
+            {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {
                 "url": "data:image/jpeg;base64," +
                        base64.b64encode(image_bytes).decode()}},
@@ -449,7 +489,9 @@ def verify_predictions(cam, image, predictions, config):
             others = {q.get("tagName") for q in predictions
                       if q is not p and q.get("tagName")
                       and not q.get("hold_only")} - {p["tagName"]}
-            got = ask(jpeg, p["tagName"], cfg, others)
+            got = ask(jpeg, p["tagName"], cfg, others,
+                      courier=(p["tagName"] == "person"
+                               and cfg.getboolean("courier", True)))
         except Exception as e:
             reason = _failure_reason(e)
             p["unverified"] = reason
@@ -475,9 +517,22 @@ def verify_predictions(cam, image, predictions, config):
             continue
 
         label, conf = got["label"], float(got.get("confidence") or 0)
-        logger.info("%s: %s %.0f%% -> %s %.0f%% (%s) $%s", cam.name,
+
+        # Informational only. It never suppresses, never relabels and is not
+        # consulted by anything below -- every other branch here answers "is
+        # this real", and letting a hallucinated vest into that decision would
+        # mean a prowler could be reasoned away. Dropped unless the model also
+        # agreed the box holds a person, and "none" is dropped rather than
+        # printed so the alert only ever gains a word by saying something.
+        courier = str(got.pop("courier", "") or "").strip().lower()
+        if label == "person" and courier in COURIERS and courier != "none":
+            got["courier"] = courier
+
+        logger.info("%s: %s %.0f%% -> %s %.0f%%%s (%s) $%s", cam.name,
                     p["tagName"], (p.get("probability") or 0) * 100,
-                    label, conf * 100, got.get("note", ""), got.get("cost"))
+                    label, conf * 100,
+                    " " + got["courier"] if got.get("courier") else "",
+                    got.get("note", ""), got.get("cost"))
         p["verified"] = got
 
         # The detector sometimes puts two labels on one animal -- "coyote 0.86"

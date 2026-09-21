@@ -74,7 +74,7 @@ def recently_seen(recent_objects, tag_name, now, hold_seconds=OBJECT_HOLD_SECOND
 
 
 def label_with_confidence(tag_names, predictions):
-    """"dog 79% (vs deer 93%),person 87% (confirmed 95%)" for the alert.
+    """"dog 79% (vs deer 93%),person 87% (confirmed 95%, amazon)" for the alert.
 
     Carries both opinions, the detector's and verify.py's, because neither is
     reliably right when they disagree. On 2026-09-14 the detector called the
@@ -107,9 +107,15 @@ def label_with_confidence(tag_names, predictions):
         part = "%s %.0f%%" % (tag, (p.get("probability") or 0) * 100)
         verdict = p.get("verified") or {}
         label, confidence = verdict.get("label"), verdict.get("confidence")
+        # Only ever set when the model both agreed the box holds a person and
+        # saw a service on them, so it needs no guard of its own here; see
+        # COURIERS in verify.py. "amazon" is worth more than "person" on a
+        # phone at 7am, which is the whole point of asking.
+        courier = verdict.get("courier")
         if label and confidence is not None:
             if label == tag:
-                part += " (confirmed %.0f%%)" % (confidence * 100)
+                part += " (confirmed %.0f%%%s)" % (
+                    confidence * 100, ", " + courier if courier else "")
             else:
                 part += " (vs %s %.0f%%)" % (label, confidence * 100)
         out.append(part)

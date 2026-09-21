@@ -678,3 +678,106 @@ def test_no_twin_means_no_duplicate():
         return_value=verdict("dog", confidence=0.95))
     assert "ignore" not in coyote
     assert coyote["tagName"] == "coyote"
+
+
+# --- which delivery service ----------------------------------------------
+
+def test_the_courier_question_is_asked_about_people():
+    p = pred("person", score=0.9)
+    asked = run([p], cfg=config(classes="person"),
+                return_value=verdict("person", confidence=0.99))
+    assert asked.call_args.kwargs["courier"] is True
+
+
+def test_the_courier_question_is_not_asked_about_animals():
+    """Twenty tokens is cheap, but a fox has no employer."""
+    p = pred("fox")
+    asked = run([p], return_value=verdict("fox"))
+    assert asked.call_args.kwargs["courier"] is False
+
+
+def test_the_courier_question_can_be_turned_off():
+    p = pred("person", score=0.9)
+    asked = run([p], cfg=config(classes="person", courier="false"),
+                return_value=verdict("person", confidence=0.99))
+    assert asked.call_args.kwargs["courier"] is False
+
+
+def test_a_recognised_courier_is_kept_on_the_prediction():
+    """2026-09-21 07:44, an Amazon Flex driver on a one-sighting plate."""
+    p = pred("person", score=0.77)
+    got = dict(verdict("person", confidence=0.99), courier="amazon")
+    run([p], cfg=config(classes="person"), return_value=got)
+    assert p["verified"]["courier"] == "amazon"
+
+
+def test_no_visible_service_leaves_the_alert_unchanged():
+    """'none' is dropped rather than printed: the alert only gains a word by
+    saying something."""
+    p = pred("person", score=0.9)
+    got = dict(verdict("person", confidence=0.99), courier="none")
+    run([p], cfg=config(classes="person"), return_value=got)
+    assert "courier" not in p["verified"]
+
+
+def test_a_courier_is_ignored_when_the_model_says_it_is_not_a_person():
+    """The dog on the deck reads as a person. Whatever the model then claims
+    about its employer is an answer about an object that is not there."""
+    p = pred("person", score=0.64)
+    got = dict(verdict("dog", confidence=0.98), courier="ups")
+    run([p], cfg=config(classes="person"), return_value=got)
+    assert "courier" not in p["verified"]
+
+
+def test_an_unknown_courier_value_is_dropped():
+    """Same reason the labels are enumerated: free text has to be matched back
+    onto something, and there is nothing to match it to."""
+    p = pred("person", score=0.9)
+    got = dict(verdict("person", confidence=0.99), courier="DoorDash-ish")
+    run([p], cfg=config(classes="person"), return_value=got)
+    assert "courier" not in p["verified"]
+
+
+def test_the_courier_never_suppresses_the_alert():
+    """It answers who, not whether. A prowler must not be reasoned away by a
+    vest the model imagined."""
+    p = pred("person", score=0.9)
+    got = dict(verdict("person", confidence=0.99), courier="amazon")
+    run([p], cfg=config(classes="person"), return_value=got)
+    assert "ignore" not in p
+
+
+def test_the_courier_clause_reaches_the_prompt():
+    body = {}
+    cfg = config(classes="person")["verify"]
+
+    class R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content":
+                    '{"label":"person","confidence":0.99,"courier":"ups"}'}}]}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        body.update(json)
+        return R()
+
+    with mock.patch.object(verify.requests, "post", fake_post):
+        out = verify.ask(b"jpeg", "person", cfg, courier=True)
+    text = body["messages"][0]["content"][0]["text"]
+    assert "courier" in text and "amazon" in text and "usps" in text
+    assert out["courier"] == "ups"
+
+    body.clear()
+    with mock.patch.object(verify.requests, "post", fake_post):
+        verify.ask(b"jpeg", "fox", cfg, courier=False)
+    assert "courier" not in body["messages"][0]["content"][0]["text"]
+
+
+def test_the_prompt_protects_the_labels_own_confidence():
+    """Measured, not assumed. Without this sentence the same crop of a real
+    Amazon driver scored person 0.99 twice and person 0.80 twice; "nothing" on
+    a person is held to NOTHING_FLOOR_STRICT, so that shift would have undone
+    31 of the 178 person->nothing suppressions in the log."""
+    assert "confidence" in verify.COURIER_PROMPT
+    assert "label" in verify.COURIER_PROMPT

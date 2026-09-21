@@ -392,3 +392,17 @@ def test_once_moved_it_does_not_become_static_again():
             [{"tagName": "vehicle", "boundingBox": _box(0.158, 0.5, 0.2, 0.2),
               "probability": 0.9}], prev, [])
     assert prev["vehicle"][0]["static"] is False
+
+
+def test_a_recognised_courier_is_named_in_the_alert():
+    """"person 77%" at 7am is worth much less than "amazon"."""
+    p = _pv("person", 0.77, "person", 0.99)
+    p["verified"]["courier"] = "amazon"
+    assert label_with_confidence({"person"}, [p]) == \
+        "person 77% (confirmed 99%, amazon)"
+
+
+def test_a_person_with_no_service_reads_as_before():
+    assert label_with_confidence(
+        {"person"}, [_pv("person", 0.9, "person", 0.99)]) == \
+        "person 90% (confirmed 99%)"

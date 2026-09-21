@@ -299,3 +299,42 @@ class TestTapConfirmation:
         with mock.patch.object(roboflow_upload, "urlopen") as sent:
             roboflow_upload.announce(200, {"verdict": "flag", "projects": []}, "a.jpg")
         assert not sent.called
+
+
+class TestRoadLabels:
+    """detect.py's synthetic classes have to be translated for the dataset.
+
+    A dog above the peach tree's road line is `dog_road`, which is how
+    notify.py decides whether it is worth waking anyone. No Roboflow project
+    has that class, so the tap on one returned 400 and did nothing -- invisible
+    until the tap confirmations went in.
+    """
+
+    def test_a_road_label_names_the_class_the_dataset_has(self):
+        assert roboflow_upload.base_label("dog_road") == "dog"
+        assert roboflow_upload.base_label("person_road") == "person"
+        assert roboflow_upload.base_label("vehicle_road") == "vehicle"
+        assert roboflow_upload.base_label("raccoon") == "raccoon"
+
+    def test_a_road_detection_routes_to_a_project(self, review, api):
+        _rewrite_boxes(review, [{"label": "person_road", "left": 0.1, "top": 0.1,
+                                 "width": 0.02, "height": 0.03, "probability": 0.54}])
+        code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "",
+                                                  {"person_road"})
+        assert code == 200 and result["projects"] == ["ipcams2"]
+
+    def test_the_annotation_uses_the_base_class(self, review, api):
+        _rewrite_boxes(review, [{"label": "person_road", "left": 0.1, "top": 0.1,
+                                 "width": 0.02, "height": 0.03, "probability": 0.54}])
+        roboflow_upload._do_upload("abc123.jpg|correct", "", "", {"person_road"})
+        boxes = api["annotate"].call_args[0][6]
+        assert boxes[0][0] == "person"
+
+    def test_the_exclusion_keeps_the_road_label(self, review, api):
+        """detect.py compares excludes against the renamed tag, not the base."""
+        _rewrite_boxes(review, [{"label": "person_road", "left": 0.1, "top": 0.1,
+                                 "width": 0.02, "height": 0.03, "probability": 0.54}])
+        roboflow_upload._do_upload("abc123.jpg|false", "", "", {"person_road"})
+        doc = _load_yaml(os.path.join(roboflow_upload._config.auto_dir,
+                                      "peach_tree-person_road-11-12.yaml"))
+        assert doc["label"] == "person_road"

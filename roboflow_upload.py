@@ -89,6 +89,25 @@ class Config(object):
         return matched
 
 
+def base_label(label):
+    """dog_road -> dog, for the dataset's sake.
+
+    detect.py renames a class when the object is over a camera's road line:
+    `dog` above the peach tree's line becomes `dog_road`, which is how notify.py
+    decides whether to wake anyone. No Roboflow project has such a class, so a
+    tap on one of those alerts routed nowhere and answered "no project matches
+    tags: dog_road" -- a 400, silent until the tap confirmations went in on
+    2026-09-21, and the reason a real "all false" on a peach tree dog did
+    nothing at 06:27 that morning.
+
+    Only the dataset gets the base name. An exclusion keeps `dog_road`, because
+    that is the tagName detect.py holds at the moment it compares against
+    excludes -- the rename happens first, and a road-line dog carries no
+    "ignore" to skip the comparison.
+    """
+    return label[:-5] if label.endswith("_road") else label
+
+
 def upload_name(cam, detection_tags, filename):
     """A name that says where the frame came from and what was claimed.
 
@@ -390,6 +409,7 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
     cam = _or(cam, None) or sidecar.get("cam") or "unknown"
     model = _or(model, None) or sidecar.get("model") or "unknown"
     detection_tags = set(t for t in (detection_tags or ()) if t) or set(sidecar.get("tags") or ())
+    detection_tags = set(base_label(t) for t in detection_tags)
 
     target_projects = _config.projects_for_tags(detection_tags)
     if not target_projects:
@@ -403,7 +423,7 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
     except IOError as e:
         return (500, {"error": "failed to read file: %s" % e})
 
-    boxes = [(b["label"], b["left"], b["top"], b["width"], b["height"])
+    boxes = [(base_label(b["label"]), b["left"], b["top"], b["width"], b["height"])
              for b in sidecar.get("boxes") or ()]
     width, height = sidecar.get("width"), sidecar.get("height")
     if verdict == "correct" and not (boxes and width and height):

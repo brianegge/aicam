@@ -159,3 +159,64 @@ class TestReviewLinks:
         # and annotating it would teach the model to keep seeing it.
         assert [b["label"] for b in doc["boxes"]] == ["deer"]
         assert doc["boxes"][0]["left"] == 0.1
+
+
+def _review_post(predictions, message, tmp_path):
+    """Run notify() far enough to see the Pushover payload it would send."""
+    from PIL import Image
+    ha = _ha()
+    ha.vacation_mode.return_value = False
+    c = _config(tmp_path)
+    c["pushover"] = {"token": "t", "user": "u"}
+    c["roboflow"] = {"webhook-url": "https://example.ui.nabu.casa/api/webhook/aicam"}
+    cam = mock.Mock()
+    cam.name = "garage"
+    cam.road_line = None
+    with mock.patch.object(notify.requests, "post") as post:
+        notify.notify(cam, message, Image.new("RGB", (1920, 1080), (40, 40, 40)),
+                      predictions, c, ha)
+    return post.call_args[1]["data"] if post.called else None
+
+
+def _cat(**extra):
+    p = {"tagName": "cat", "probability": 0.79, "camName": "garage",
+         "boundingBox": {"left": 0.60, "top": 0.87, "width": 0.15, "height": 0.10},
+         "center": {"x": 0.67, "y": 0.92}}
+    p.update(extra)
+    return p
+
+
+class TestNothingToJudge:
+    """A departure alert has no object in it, so it gets no verdicts.
+
+    The frame attached to "cat departed from garage" is the one where the cat
+    has gone; the box is where it last was. Offering "all correct" there means
+    offering to annotate an empty garage floor as a cat.
+    """
+
+    def test_a_departure_offers_review_but_not_a_verdict(self, tmp_path):
+        data = _review_post([_cat(departed=True)],
+                            "cat departed from garage after being seen 25 times",
+                            tmp_path)
+        assert "url" in data and data["url_title"] == "Flag for Review"
+        assert "html" not in data
+        assert "<a href=" not in data["message"]
+
+    def test_a_live_detection_still_offers_both(self, tmp_path):
+        data = _review_post([_cat()], "cat in garage", tmp_path)
+        assert data["html"] == 1
+        assert data["message"].count("<a href=") == 2
+
+    def test_a_departed_box_never_reaches_the_sidecar(self):
+        assert notify.sidecar_boxes([_cat(departed=True)]) == []
+        assert notify.sidecar_boxes([_cat(ignore="mulch bed rock")]) == []
+        assert [b["label"] for b in notify.sidecar_boxes([_cat()])] == ["cat"]
+
+    def test_a_wholly_suppressed_frame_never_gets_as_far_as_an_alert(self, tmp_path):
+        """An excluded prediction is priority -4, under the bar to send at all.
+
+        So the "no judgeable box" branch is reached by departures in practice.
+        autolabel files these frames as negatives without anyone tapping.
+        """
+        assert _review_post([_cat(ignore="mulch bed rock")], "cat in garage",
+                            tmp_path) is None

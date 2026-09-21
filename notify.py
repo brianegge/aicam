@@ -17,6 +17,37 @@ logger = logging.getLogger(__name__)
 PUSHOVER_MESSAGE_LIMIT = 1024
 
 
+def sidecar_boxes(predictions):
+    """The boxes in an alert that a person can actually judge.
+
+    Two kinds are left out. One an exclusion suppressed is scenery: leaving it
+    out of the annotation is what makes the frame teach the model to stop
+    seeing it.
+
+    A **departed** one is worse than useless. A departure alert's frame is the
+    one where the object is no longer there, and its box is where the object
+    last was, drawn grey. Answering "all correct" to that would upload an empty
+    frame annotated with a cat, and teach the detector that a patch of garage
+    floor is a cat. Found at 04:09 on 2026-09-21: "cat departed from garage
+    after being seen 25 times over the past 11 minutes", sidecar d5b978a2
+    holding a cat at 0.60,0.87 of a frame with no cat in it.
+    """
+    boxes = []
+    for p in predictions:
+        if "ignore" in p or "departed" in p:
+            continue
+        b = p.get("boundingBox")
+        if not b:
+            continue
+        boxes.append({
+            "label": p["tagName"],
+            "left": float(b["left"]), "top": float(b["top"]),
+            "width": float(b["width"]), "height": float(b["height"]),
+            "probability": float(p.get("probability", 0)),
+        })
+    return boxes
+
+
 def write_sidecar(review_dir, review_file, cam_name, model_name, detection_tags,
                   predictions, size):
     """Record what the detector claimed, beside the frame it claimed it about.
@@ -32,19 +63,7 @@ def write_sidecar(review_dir, review_file, cam_name, model_name, detection_tags,
     suppressed is scenery: leaving it out of the annotation is what makes the
     frame teach the model to stop seeing it.
     """
-    boxes = []
-    for p in predictions:
-        if "ignore" in p:
-            continue
-        b = p.get("boundingBox")
-        if not b:
-            continue
-        boxes.append({
-            "label": p["tagName"],
-            "left": float(b["left"]), "top": float(b["top"]),
-            "width": float(b["width"]), "height": float(b["height"]),
-            "probability": float(p.get("probability", 0)),
-        })
+    boxes = sidecar_boxes(predictions)
     doc = {
         "file": review_file,
         "cam": cam_name,
@@ -498,6 +517,12 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
                 if page:
                     pushover_data["url"] = review_page_url(page, review_file, cam.name)
                     pushover_data["url_title"] = "Review Detection"
+                elif not sidecar_boxes(predictions):
+                    # Nothing in this frame to be right or wrong about -- a
+                    # departure alert, or a frame whose every box was
+                    # suppressed. "Flag for Review" still asks a human; the
+                    # verdicts would be asking about an empty picture.
+                    logger.info("%s: no judgeable box, offering review only", cam.name)
                 else:
                     verdicts = verdict_html(webhook_url, review_file)
                     if len(message) + len(verdicts) + 1 <= PUSHOVER_MESSAGE_LIMIT:

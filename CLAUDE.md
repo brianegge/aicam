@@ -137,6 +137,44 @@ curl -s http://openclaw.home:5050/health
 ssh openclaw.home "tail -n 50 ~/aicam-data/aicam-review.log"
 ```
 
+### What a tap actually does
+
+The Pushover link does **not** reach this host. It goes to
+`https://<nabu-casa>/api/webhook/aicam_roboflow_review`, where automation
+`aicam_roboflow_upload_webhook` forwards `trigger.query.{file,model,cam,tags}`
+to `rest_command.aicam_roboflow_upload`, which POSTs to claw-mini:5050. That
+indirection is why the link works when you are not home — claw-mini is on the
+isolated OpenClaw subnet and is not reachable from outside.
+
+Three verdicts, since 2026-09-20:
+
+| tap | dataset |
+|-----|---------|
+| Flag for Review | uploaded unannotated, to be labelled by hand |
+| ✓ All correct | uploaded and annotated with the boxes from the alert |
+| ✗ All false | uploaded with a zero-box VOC annotation (background), and a candidate exclusion parked in `excludes/pending/` |
+
+Pushover allows **one** `url` per message, so "all correct" and "all false" are
+`<a href>` links in the message body (`html=1`) and the supplementary link
+stays "Flag for Review". The verdict rides on the file name —
+`?file=abc123.jpg|correct` — because the rest_command's payload is YAML on the
+Home Assistant box and cannot be changed from here; a bare name still means
+flag, which is what the MQTT button in `main.py` sends. Everything else the
+upload needs (boxes, frame size, camera, model) is in
+`review/<id>.json`, written by `notify.write_sidecar` beside the frame: a
+Pushover url is capped at 512 chars and the webhook forwards four fixed fields.
+
+`excludes/pending/` is not loaded — `excludes.load_dir` globs `excludes/*.yaml`
+and does not recurse. A candidate is one frame's box; a real exclusion here is
+the median of an archive audit (see `excludes/deck-person-22-69.yaml`), so it
+stays inert until someone does that work.
+
+Optional: `review.html` in this repo is the same three verdicts as buttons on a
+page. Copy it to Home Assistant's `/config/www/review.html` and set
+`review-page-url` in `[roboflow]`; aicam then sends one link to the page
+instead of three links. Worth it mainly because opening the page asserts
+nothing, where every inline link is a bare GET.
+
 ## Logs
 ```bash
 # View aicam logs

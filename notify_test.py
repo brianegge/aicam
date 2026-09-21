@@ -6,6 +6,7 @@ cleaner, and pausing person detection for a crew. Both act on a matched plate
 record, so a wrong match has consequences beyond a mis-worded alert.
 """
 
+import json
 import logging
 from unittest import mock
 
@@ -111,3 +112,50 @@ def test_the_house_cleaner_rule_still_fires(plates_db, tmp_path):
     _notify(ha, [_vehicle("2AVJU3")], tmp_path)
     assert ha.house_cleaners_arrived.called
     assert not ha.suppress_notify_person.called
+
+
+class TestReviewLinks:
+    """The three verdicts a Pushover alert offers, and what they carry.
+
+    The tap does not reach aicam. It goes to a Home Assistant webhook, which
+    hands four fixed query fields to a rest_command whose payload lives in YAML
+    on that box, so anything new has to travel inside a field that already
+    exists. These tests pin the two halves of that: what goes in the link, and
+    what goes on disk because it could not.
+    """
+
+    WEBHOOK = "https://example.ui.nabu.casa/api/webhook/aicam_roboflow_review"
+
+    def test_the_verdict_travels_on_the_file_name(self):
+        url = notify.verdict_url(self.WEBHOOK, "abc123.jpg", "correct")
+        assert url == self.WEBHOOK + "?file=abc123.jpg%7Ccorrect"
+
+    def test_a_flag_link_is_the_bare_name_the_old_path_expects(self):
+        assert notify.verdict_url(self.WEBHOOK, "abc123.jpg", "flag").endswith("file=abc123.jpg")
+
+    def test_a_verdict_link_carries_no_ampersand(self):
+        """It is sent inside HTML; "&" vs "&amp;" in an href is not worth risking."""
+        assert "&" not in notify.verdict_url(self.WEBHOOK, "abc123.jpg", "false")
+
+    def test_both_verdicts_are_offered(self):
+        markup = notify.verdict_html(self.WEBHOOK, "abc123.jpg")
+        assert markup.count("<a href=") == 2
+        assert "%7Ccorrect" in markup and "%7Cfalse" in markup
+
+    def test_the_sidecar_records_the_boxes_the_alert_was_about(self, tmp_path):
+        predictions = [
+            {"tagName": "deer", "probability": 0.72,
+             "boundingBox": {"left": 0.1, "top": 0.2, "width": 0.3, "height": 0.4}},
+            {"tagName": "rabbit", "probability": 0.6, "ignore": "pale stone",
+             "boundingBox": {"left": 0.5, "top": 0.5, "width": 0.1, "height": 0.1}},
+        ]
+        path = notify.write_sidecar(str(tmp_path), "abc123.jpg", "peach tree", "ipcams",
+                                    {"deer"}, predictions, (2688, 1520))
+        doc = json.load(open(path))
+        assert path.endswith("abc123.json")
+        assert doc["cam"] == "peach tree" and doc["tags"] == ["deer"]
+        assert (doc["width"], doc["height"]) == (2688, 1520)
+        # The suppressed one is left out on purpose: an excluded box is scenery,
+        # and annotating it would teach the model to keep seeing it.
+        assert [b["label"] for b in doc["boxes"]] == ["deer"]
+        assert doc["boxes"][0]["left"] == 0.1

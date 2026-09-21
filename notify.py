@@ -3,7 +3,7 @@ import logging
 import os
 import uuid
 from io import BytesIO
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import cv2
 import requests
@@ -11,6 +11,96 @@ from PIL import Image
 
 
 logger = logging.getLogger(__name__)
+
+# Pushover truncates a message past this and rejects some payloads outright;
+# the limits are message 1024, url 512, url_title 100.
+PUSHOVER_MESSAGE_LIMIT = 1024
+
+
+def write_sidecar(review_dir, review_file, cam_name, model_name, detection_tags,
+                  predictions, size):
+    """Record what the detector claimed, beside the frame it claimed it about.
+
+    "All correct" has to turn the alert's boxes into a Roboflow annotation, and
+    the boxes cannot travel in the link: Pushover caps a url at 512 characters,
+    and the tap does not reach aicam anyway -- it goes to a Home Assistant
+    webhook that forwards four fixed query fields. The frame is already written
+    to review/ on local disk and the upload server runs on this same host, so
+    the geometry goes next to it and the link carries only a name.
+
+    Only predictions the alert was about are recorded. One that an exclusion
+    suppressed is scenery: leaving it out of the annotation is what makes the
+    frame teach the model to stop seeing it.
+    """
+    boxes = []
+    for p in predictions:
+        if "ignore" in p:
+            continue
+        b = p.get("boundingBox")
+        if not b:
+            continue
+        boxes.append({
+            "label": p["tagName"],
+            "left": float(b["left"]), "top": float(b["top"]),
+            "width": float(b["width"]), "height": float(b["height"]),
+            "probability": float(p.get("probability", 0)),
+        })
+    doc = {
+        "file": review_file,
+        "cam": cam_name,
+        "model": model_name,
+        "tags": sorted(detection_tags),
+        "width": size[0],
+        "height": size[1],
+        "boxes": boxes,
+    }
+    path = os.path.join(review_dir, os.path.splitext(review_file)[0] + ".json")
+    with open(path, "w") as f:
+        json.dump(doc, f, indent=2, sort_keys=True)
+    return path
+
+
+def verdict_url(webhook_url, review_file, verdict):
+    """A one-tap verdict, as a URL Home Assistant forwards without being taught it.
+
+    The verdict rides on the file name rather than a query field of its own
+    because the automation hands `trigger.query.file` to
+    `rest_command.aicam_roboflow_upload`, whose payload is YAML on the Home
+    Assistant box -- not something this repo, or its API token, can change. A
+    file name cannot contain "|", so the split is unambiguous, and a bare name
+    still means "flag": the MQTT button in main.py sends one.
+
+    Nothing but `file` is passed. Everything else the upload needs is in the
+    sidecar, and one query field means no "&" to escape -- the message is sent
+    as HTML, and whether Pushover's parser would hand back "&amp;" or "&" in an
+    href is not a thing worth finding out from a link that only ever fails on
+    someone's phone.
+    """
+    separator = "&" if "?" in webhook_url else "?"
+    name = review_file if verdict == "flag" else "%s|%s" % (review_file, verdict)
+    return webhook_url + separator + "file=" + quote(name, safe="")
+
+
+def review_page_url(page_url, review_file, cam_name):
+    """The same three verdicts behind one link, for when review.html is installed.
+
+    The page is static and hosted by Home Assistant (/config/www, served at
+    /local/ and reachable through the Nabu Casa URL); its buttons call the same
+    webhook. Worth the install because opening it asserts nothing -- with
+    inline links every verdict is a bare GET, and anything that follows a link
+    to see what is behind it has voted.
+    """
+    separator = "&" if "?" in page_url else "?"
+    return page_url + separator + urlencode(
+        {"file": review_file, "cam": cam_name.replace(" ", "_")})
+
+
+def verdict_html(webhook_url, review_file):
+    """The two judgements worth making from the lock screen, as tappable links."""
+    return '<a href="%s">&#10003; All correct</a>    <a href="%s">&#10007; All false</a>' % (
+        verdict_url(webhook_url, review_file, "correct"),
+        verdict_url(webhook_url, review_file, "false"),
+    )
 
 license_plates = {}
 # Maps variant strings (exact + edits1) of known plates to their original plate key.
@@ -387,6 +477,8 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
                 review_image.save(os.path.join(review_dir, review_file))
                 webhook_url = config["roboflow"]["webhook-url"]
                 detection_tags = set(p["tagName"] for p in predictions if "ignore" not in p)
+                write_sidecar(review_dir, review_file, cam.name, model_name,
+                              detection_tags, predictions, review_image.size)
                 separator = "&" if "?" in webhook_url else "?"
                 pushover_data["url"] = webhook_url + separator + urlencode(
                     {
@@ -397,6 +489,24 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
                     }
                 )
                 pushover_data["url_title"] = "Flag for Review"
+                # Pushover allows exactly one url per message, so the other two
+                # judgements go in the message body as links. If a review page
+                # is installed (see review.html) it replaces all three: one
+                # link, and the verdict chosen on a page instead of by which
+                # link was tapped.
+                page = config["roboflow"].get("review-page-url", "")
+                if page:
+                    pushover_data["url"] = review_page_url(page, review_file, cam.name)
+                    pushover_data["url_title"] = "Review Detection"
+                else:
+                    verdicts = verdict_html(webhook_url, review_file)
+                    if len(message) + len(verdicts) + 1 <= PUSHOVER_MESSAGE_LIMIT:
+                        pushover_data["message"] = message + "\n" + verdicts
+                        pushover_data["html"] = 1
+                    else:
+                        logger.warning(
+                            "%s: message is %d chars, no room for the verdict links",
+                            cam.name, len(message))
             except Exception:
                 logger.exception("Failed to save review image")
         try:

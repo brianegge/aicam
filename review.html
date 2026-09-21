@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<!--
+  One link in a Pushover alert, three verdicts on a page.
+
+  Install: copy to Home Assistant's /config/www/review.html (File editor,
+  Studio Code Server or Samba -- there is no API for it), then set in aicam's
+  config.txt:
+
+      [roboflow]
+      review-page-url = https://<your-nabu-casa-host>/local/review.html
+
+  and restart aicam. Until then notify.py puts the verdicts in the message as
+  links instead.
+
+  Nothing here knows an API key or a camera password: the buttons call the same
+  Home Assistant webhook the links do, on the origin this page was served from,
+  so it works locally and through the Nabu Casa URL with no second hostname to
+  keep in sync. Files under /config/www are served without authentication --
+  this page is only as private as the review id in its query string, which is
+  also true of the links it replaces.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AICam Review</title>
+<style>
+ body{font-family:system-ui,sans-serif;max-width:520px;margin:24px auto;padding:0 16px;
+      background:#111;color:#eee}
+ img{width:100%;border-radius:8px;margin-bottom:16px}
+ button{display:block;width:100%;padding:16px;margin:8px 0;font-size:17px;
+        border:0;border-radius:8px;color:#fff}
+ .correct{background:#16a34a}.false{background:#dc2626}.flag{background:#525252}
+ button[disabled]{opacity:.45}
+ #out{margin-top:16px;white-space:pre-wrap;font-size:14px;color:#aaa}
+ h2{font-size:18px;font-weight:600}
+</style>
+</head>
+<body>
+<h2 id="what">Review</h2>
+<img id="frame" alt="" hidden>
+<button class="correct" data-v="correct">&#10003; All detections correct</button>
+<button class="false"   data-v="false">&#10007; All detections false</button>
+<button class="flag"    data-v="flag">Flag for review</button>
+<div id="out"></div>
+<script>
+ var q = new URLSearchParams(location.search);
+ var file = q.get("file") || "";
+ var cam = (q.get("cam") || "").replace(/_/g, " ");
+ document.getElementById("what").textContent = cam ? cam + " — " + file : file;
+
+ // Only reachable on the home network: claw-mini sits on the isolated OpenClaw
+ // subnet, and this page is https when it comes through Nabu Casa. Hidden
+ // unless it loads.
+ var img = document.getElementById("frame");
+ img.onload = function () { img.hidden = false; };
+ if (file) img.src = "http://openclaw.home:5050/image?file=" + encodeURIComponent(file);
+
+ var out = document.getElementById("out");
+ function vote(verdict) {
+   var buttons = document.querySelectorAll("button");
+   for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+   out.textContent = "Sending…";
+   var name = verdict === "flag" ? file : file + "|" + verdict;
+   fetch(location.origin + "/api/webhook/aicam_roboflow_review?file="
+         + encodeURIComponent(name))
+     .then(function (r) { return r.text(); })
+     .then(function (t) { out.textContent = t || "Sent."; })
+     .catch(function (e) {
+       out.textContent = "Failed: " + e;
+       for (var i = 0; i < buttons.length; i++) buttons[i].disabled = false;
+     });
+ }
+ document.addEventListener("click", function (e) {
+   if (e.target.dataset && e.target.dataset.v) vote(e.target.dataset.v);
+ });
+</script>
+</body>
+</html>

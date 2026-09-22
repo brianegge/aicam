@@ -552,9 +552,14 @@ def announce(code, result, filename):
         "token": token, "user": user,
         "title": "AICam review",
         "message": message,
-        # -1 is a notification without a sound: this is an answer to something
-        # the person just did, not news.
-        "priority": -1,
+        # 0, not -1. -1 is delivered without sound OR banner on iOS, straight
+        # into Notification Center -- which is right for news nobody asked
+        # for and wrong for this. Brian tapped "All detections false" on
+        # 2026-09-21, watched the page say the confirmation would arrive, and
+        # reported not getting one; every tap on file had in fact reached
+        # Pushover and been accepted. A confirmation someone is waiting for
+        # has to be visible, and there is at most one per tap.
+        "priority": 0,
     }).encode("utf-8")
     try:
         req = Request("https://api.pushover.net/1/messages.json", data=data, method="POST")

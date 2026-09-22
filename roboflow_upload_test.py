@@ -282,13 +282,15 @@ class TestTapConfirmation:
                                           "abc123.jpg")
         assert msg == "abc123.jpg: file not found: abc123.jpg"
 
-    def test_a_confirmation_is_quiet(self, review, api):
+    def test_a_confirmation_is_visible(self, review, api):
+        """It answers something the person just did and is waiting on, so it
+        cannot be a priority -1 that iOS delivers with no banner at all."""
         roboflow_upload._config.pushover = ("tok", "usr")
         with mock.patch.object(roboflow_upload, "urlopen") as sent:
             roboflow_upload.announce(200, {"verdict": "flag", "projects": ["ipcams2"]},
                                      "abc123.jpg")
         body = sent.call_args[0][0].data.decode()
-        assert "priority=-1" in body and "token=tok" in body
+        assert "priority=0" in body and "token=tok" in body
 
     def test_pushover_being_down_does_not_fail_the_tap(self, review, api):
         roboflow_upload._config.pushover = ("tok", "usr")

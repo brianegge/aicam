@@ -534,14 +534,24 @@ def tap_message(code, result, filename):
 
 
 def announce(code, result, filename):
-    """Tell the phone what happened, quietly. Never worth failing the tap over."""
+    """Tell the phone what happened, quietly. Never worth failing the tap over.
+
+    Logs what it sent, and whether Pushover took it. Both were missing, and
+    between them they cost an evening: "no notification for the false option"
+    could not be answered from the log at all, because a successful send wrote
+    nothing and a rejected one wrote nothing either. Every tap in the log had
+    reached Pushover and been accepted, which the log could have said.
+    """
     if not _config or not _config.pushover:
+        logger.info("tap on %s: no Pushover configured, not confirming",
+                    os.path.basename(filename or "?"))
         return
     token, user = _config.pushover
+    message = tap_message(code, result, filename)
     data = urlencode({
         "token": token, "user": user,
         "title": "AICam review",
-        "message": tap_message(code, result, filename),
+        "message": message,
         # -1 is a notification without a sound: this is an answer to something
         # the person just did, not news.
         "priority": -1,
@@ -549,9 +559,25 @@ def announce(code, result, filename):
     try:
         req = Request("https://api.pushover.net/1/messages.json", data=data, method="POST")
         req.add_header("Content-Type", "application/x-www-form-urlencoded")
-        urlopen(req, timeout=10).read()
+        body = urlopen(req, timeout=10).read()
     except Exception:
         logger.warning("could not confirm the tap over Pushover", exc_info=True)
+        return
+    # A 4xx raises above, but Pushover also answers 200 with status 0 and an
+    # `errors` list -- a retired device key, a message over the length cap.
+    # Reading the body and throwing it away turned that into silence.
+    try:
+        answer = json.loads(body)
+    except Exception:
+        logger.warning("Pushover replied with something that is not JSON: %r",
+                       body[:200])
+        return
+    if answer.get("status") == 1:
+        logger.info("confirmed the tap over Pushover: %s", message)
+    else:
+        logger.warning("Pushover refused the tap confirmation: %s (sent %r)",
+                       "; ".join(answer.get("errors") or ["no reason given"]),
+                       message)
 
 
 _TITLES = {

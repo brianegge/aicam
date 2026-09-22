@@ -10,6 +10,7 @@ somebody else's HTTP.
 """
 
 import json
+import logging
 import os
 from configparser import ConfigParser
 from unittest import mock
@@ -299,6 +300,50 @@ class TestTapConfirmation:
         with mock.patch.object(roboflow_upload, "urlopen") as sent:
             roboflow_upload.announce(200, {"verdict": "flag", "projects": []}, "a.jpg")
         assert not sent.called
+
+    @staticmethod
+    def _replies(payload):
+        """urlopen returning one Pushover body."""
+        return mock.patch.object(
+            roboflow_upload, "urlopen",
+            return_value=mock.Mock(read=lambda: json.dumps(payload).encode()))
+
+    def test_a_sent_confirmation_says_so_and_quotes_it(self, review, api, caplog):
+        """'No notification for the false option' could not be answered from
+        the log: a send that worked wrote nothing, and so did one that did
+        not."""
+        roboflow_upload._config.pushover = ("tok", "usr")
+        with self._replies({"status": 1}), caplog.at_level(logging.INFO):
+            roboflow_upload.announce(200, {
+                "verdict": "false", "projects": ["ipcams2"],
+                "silenced": ["garage_l-dog-26-11"]}, "6b6fc321.jpg")
+        assert "confirmed the tap over Pushover" in caplog.text
+        assert "silenced garage_l-dog-26-11" in caplog.text
+
+    def test_a_refusal_at_200_is_not_silence(self, review, api, caplog):
+        """Pushover answers 200 with status 0 for a retired device key or a
+        message over the cap. Reading the body and discarding it hid that."""
+        roboflow_upload._config.pushover = ("tok", "usr")
+        with self._replies({"status": 0, "errors": ["user identifier is invalid"]}), \
+             caplog.at_level(logging.INFO):
+            roboflow_upload.announce(200, {"verdict": "flag", "projects": []}, "a.jpg")
+        assert "Pushover refused" in caplog.text
+        assert "user identifier is invalid" in caplog.text
+
+    def test_a_reply_that_is_not_json_is_reported(self, review, api, caplog):
+        roboflow_upload._config.pushover = ("tok", "usr")
+        with mock.patch.object(roboflow_upload, "urlopen",
+                               return_value=mock.Mock(read=lambda: b"<html>502")), \
+             caplog.at_level(logging.INFO):
+            roboflow_upload.announce(200, {"verdict": "flag", "projects": []}, "a.jpg")
+        assert "not JSON" in caplog.text
+
+    def test_an_unconfigured_pushover_is_logged_rather_than_silent(self, review, api,
+                                                                   caplog):
+        roboflow_upload._config.pushover = None
+        with caplog.at_level(logging.INFO):
+            roboflow_upload.announce(200, {"verdict": "flag", "projects": []}, "a.jpg")
+        assert "no Pushover configured" in caplog.text
 
 
 class TestRoadLabels:

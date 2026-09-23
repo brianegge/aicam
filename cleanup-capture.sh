@@ -18,7 +18,17 @@ FULL_PCT="${AICAM_FULL_PCT:-92}"
 [ -d "$DIR" ] || exit 0
 
 # Age-based pass: drop whole day directories older than KEEP_DAYS.
-find "$DIR" -mindepth 1 -maxdepth 1 -type d -mtime "+${KEEP_DAYS}" -print -exec rm -rf {} +
+find "$DIR" -mindepth 1 -maxdepth 1 -type d -name '2[0-9][0-9][0-9][0-1][0-9][0-3][0-9]' \
+    -mtime "+${KEEP_DAYS}" -print -exec rm -rf {} +
+
+# review/ is flat, not named by day, and its own mtime is bumped every time a
+# verdict frame lands in it, so the pass above never reaps it. Age its contents
+# out file by file instead. Only review/ -- excludes-auto/ next to it holds live
+# exclusion definitions that main.py loads at startup, and static/ is fixture
+# data; neither ages out.
+if [ -d "${DIR}/review" ]; then
+    find "${DIR}/review" -type f -mtime "+${KEEP_DAYS}" -delete
+fi
 
 # Safety valve: while the volume is over FULL_PCT, drop the oldest day
 # directory. Bounded so a disk filled by something else cannot spin here.
@@ -26,9 +36,9 @@ i=0
 while [ "$i" -lt 60 ]; do
     usep=$(df -P "$DIR" | awk 'NR==2 { gsub(/%/, "", $5); print $5 }')
     [ "$usep" -ge "$FULL_PCT" ] || break
-    oldest=$(ls -tr "$DIR" 2>/dev/null | head -n 1)
-    [ -n "$oldest" ] || break
+    oldest=$(ls -dtr "$DIR"/2[0-9][0-9][0-9][0-1][0-9][0-3][0-9] 2>/dev/null | head -n 1)
+    [ -n "$oldest" ] && [ -d "$oldest" ] || break
     echo "$(date): ${DIR} at ${usep}%, removing ${oldest}"
-    rm -rf "${DIR:?}/${oldest}"
+    rm -rf "$oldest"
     i=$((i + 1))
 done

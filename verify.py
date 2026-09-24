@@ -94,8 +94,14 @@ ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 # but because "other" is suppressed by default, so anything missing from this
 # list is silently dropped when the model is confident about it. Black bears
 # are resident in Connecticut and would otherwise land in "other".
+# "package" is here so the class can be verified rather than merely
+# thresholded. A parcel on the porch is exactly the case the detector is worst
+# at ranking: the UPS delivery of 2026-09-23 scored 0.723 and a false one on
+# the same camera scored 0.804, so no bar separates them -- but a model shown
+# the crop can say which is a parcel and which is a doormat.
 LABELS = ["deer", "fox", "coyote", "bear", "dog", "cat", "rabbit", "raccoon",
-          "squirrel", "bird", "person", "vehicle", "other", "nothing"]
+          "squirrel", "bird", "person", "vehicle", "package", "other",
+          "nothing"]
 
 PROMPT = (
     "A motion detector on a home security camera claims the red box contains "

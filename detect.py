@@ -137,15 +137,28 @@ def _frame_jpeg(image, quality=90):
     return buf.getvalue()
 
 
-def threshold_for(tag_name, thresholds, dark_thresholds, default):
-    """New-object threshold for a class, preferring the dark override.
+def threshold_for(tag_name, thresholds, dark_thresholds, default,
+                  cam_thresholds=None):
+    """New-object threshold for a class, preferring the narrower setting.
 
     IR floodlight glare reads as a vehicle to the detector: overnight on
     2026-09-03 the driveway and peach tree produced 147 vehicle detections
     topping out at 0.88, none of them real. Raising the bar only while it is
     actually dark keeps daytime recall, where the same class legitimately
     scores 0.85-0.95.
+
+    A camera's own setting is narrower still and wins outright, dark or not.
+    One bar per class has to serve fifteen cameras, and what it costs is not
+    the same at each: package=0.80 is right where the class has nothing to
+    find and every detection is scenery, and on the front entry it is what
+    lost the UPS parcel of 2026-09-23 -- boxed correctly at 0.723, left on the
+    porch, never announced. A camera that says what it is for is the one place
+    that difference can be written down.
     """
+    if cam_thresholds:
+        override = cam_thresholds.get(tag_name)
+        if override is not None:
+            return float(override)
     if dark_thresholds is not None:
         override = dark_thresholds.get(tag_name)
         if override is not None:
@@ -155,7 +168,8 @@ def threshold_for(tag_name, thresholds, dark_thresholds, default):
 
 
 def apply_thresholds(
-    predictions, thresholds, dark_thresholds, default, recent_objects, now
+    predictions, thresholds, dark_thresholds, default, recent_objects, now,
+    cam_thresholds=None
 ):
     """Drop predictions under their class threshold, except held-over ones.
 
@@ -169,7 +183,7 @@ def apply_thresholds(
     kept = []
     for p in predictions:
         if p["probability"] > threshold_for(
-            p["tagName"], thresholds, dark_thresholds, default
+            p["tagName"], thresholds, dark_thresholds, default, cam_thresholds
         ):
             kept.append(p)
         elif (
@@ -295,6 +309,7 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         threshold,
         cam.recent_objects,
         hold_now,
+        getattr(cam, "thresholds", None),
     )
     for p in predictions:
         p["camName"] = cam.name

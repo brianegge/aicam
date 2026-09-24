@@ -526,3 +526,22 @@ def test_resize_handles_a_genuinely_greyscale_frame():
     cam.image = grey
     cam.resize()
     assert cam.resized.ndim == 3 and cam.resized.shape[2] == 3
+
+
+# --- per-camera thresholds ---------------------------------------------------
+
+def test_a_camera_reads_its_own_class_thresholds():
+    """`threshold-package = 0.60` on the camera where deliveries land."""
+    cam = _make_camera(**{"threshold-package": "0.60"})
+    assert cam.thresholds == {"package": 0.60}
+
+
+def test_a_camera_with_no_overrides_has_none():
+    assert _make_camera().thresholds == {}
+
+
+def test_the_detectors_own_threshold_key_is_not_a_class():
+    """`threshold` is the global default in [detector]; a camera saying
+    `threshold-` with nothing after it is a typo, not a class named ""."""
+    cam = _make_camera(**{"threshold-": "0.60", "threshold-person": "0.40"})
+    assert cam.thresholds == {"person": 0.40}

@@ -406,3 +406,40 @@ def test_a_person_with_no_service_reads_as_before():
     assert label_with_confidence(
         {"person"}, [_pv("person", 0.9, "person", 0.99)]) == \
         "person 90% (confirmed 99%)"
+
+
+# --- per-camera thresholds ---------------------------------------------------
+
+def test_a_cameras_own_threshold_wins_over_the_global_one():
+    """The UPS parcel of 2026-09-23 was boxed correctly on the front entry at
+    0.723 against a global package bar of 0.80, and never announced. The bar
+    is right for the lawns, where the class has nothing to find."""
+    day = _section({"package": "0.80"})
+    mine = _section({"package": "0.60"})
+    assert threshold_for("package", day, None, DEFAULT) == 0.80
+    assert threshold_for("package", day, None, DEFAULT, mine) == 0.60
+
+
+def test_a_cameras_own_threshold_wins_over_the_dark_override():
+    """It is the narrower statement of the two: this class, on this camera."""
+    day = _section({"vehicle": "0.70"})
+    dark = _section({"vehicle": "0.90"})
+    mine = _section({"vehicle": "0.95"})
+    assert threshold_for("vehicle", day, dark, DEFAULT, mine) == 0.95
+
+
+def test_a_camera_that_says_nothing_about_a_class_changes_nothing():
+    day = _section({"package": "0.80"})
+    mine = _section({"person": "0.40"})
+    assert threshold_for("package", day, None, DEFAULT, mine) == 0.80
+    assert threshold_for("package", day, None, DEFAULT, None) == 0.80
+
+
+def test_the_parcel_survives_on_the_camera_that_lowered_the_bar():
+    now = datetime.now()
+    package = _pred("package", 0.723)
+    globals_ = _section({"package": "0.80"})
+    assert apply_thresholds([package], globals_, None, 0.7, {}, now) == []
+    kept = apply_thresholds([package], globals_, None, 0.7, {}, now,
+                            _section({"package": "0.60"}))
+    assert len(kept) == 1 and "hold_only" not in kept[0]

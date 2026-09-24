@@ -143,6 +143,19 @@ class Camera:
         self.bi_hash = None
         self.bi_dups = 0
         self.mqtt = set(config.get("mqtt", "").split(","))
+        # Per-camera acquire thresholds, as `threshold-<class> = 0.60`.
+        #
+        # The global bar has to hold for fifteen cameras at once, and what it
+        # costs is not the same at each. package=0.80 is right for the lawns,
+        # where the class has nothing to find and every detection is scenery;
+        # on the front entry, where deliveries actually land, it is what lost
+        # the UPS parcel of 2026-09-23 at 0.723 -- boxed correctly, left on
+        # the porch, never announced.
+        self.thresholds = {
+            key[len("threshold-"):]: config.getfloat(key)
+            for key in config
+            if key.startswith("threshold-") and key != "threshold-"
+        }
         self.mqtt_client = mqtt_client
         # A camera can name its own snapshot source, which takes precedence
         # over Blue Iris. Used to pull from Frigate's bundled go2rtc, which

@@ -781,3 +781,12 @@ def test_the_prompt_protects_the_labels_own_confidence():
     31 of the 178 person->nothing suppressions in the log."""
     assert "confidence" in verify.COURIER_PROMPT
     assert "label" in verify.COURIER_PROMPT
+
+
+def test_package_is_a_label_the_model_may_answer():
+    """Anything outside LABELS is dropped, so a "package" verdict on a package
+    detection would have been unreadable -- and the class is exactly the one
+    no threshold separates: the UPS parcel of 2026-09-23 scored 0.723 and a
+    false one on the same camera scored 0.804."""
+    assert "package" in verify.LABELS
+    assert "package" not in verify.MUTUALLY_EXCLUSIVE

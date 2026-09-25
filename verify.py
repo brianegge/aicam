@@ -39,7 +39,9 @@ That kills the obvious safety rail. A ceiling that declines to second-guess a
 confident detector would have blocked six of the seven real catches and left
 the feature doing nothing for the class that needed it most -- the detector's
 confidence carries almost no information about whether a deer is there.
-`max-score` still exists for anyone who wants that trade, but it defaults off.
+`max-score` still exists for anyone who wants that trade, but it defaults off,
+and `max-score-<class>` sets it for one class -- see ceiling_for(), where the
+dog numbers that earned one are written down.
 
 The protection instead comes from the evidence, not from deference: "that is a
 squirrel" is a positive identification, while "nothing" is the answer the model
@@ -456,6 +458,25 @@ def verify_predictions(cam, image, predictions, config):
     dup_iou = cfg.getfloat("duplicate-box-iou", 0.8)
     # Off by default; see the note above on detector confidence.
     ceiling = cfg.getfloat("max-score", 1.01)
+
+    def ceiling_for(tag):
+        """Above this the detector is not second-guessed, per class.
+
+        The global default stays off, for the reason argued at the top of this
+        file: a deer at 0.96 is as likely to be scenery as one at 0.51, so a
+        blanket ceiling would have blocked six of the seven catches that
+        justified this feature.
+
+        Dog is not deer. Measured over 3,511 dog detections this log has sent
+        for a second opinion, the overrule rate falls away with confidence:
+        66% below 0.60, 24% in the 0.70s, 4.2% in the 0.80s, and of the 475
+        at 0.91 or above, the model has never once disagreed. The two highest
+        it ever corrected were a deer and a cat, both at exactly 0.90.
+
+        So this is per class, set where the evidence for that class puts it.
+        """
+        override = cfg.get("max-score-%s" % tag)
+        return float(override) if override is not None else ceiling
     iou_floor = cfg.getfloat("cache-iou", 0.8)
     ttl = cfg.getfloat("cache-minutes", 60) * 60
     now = time.time()
@@ -465,9 +486,10 @@ def verify_predictions(cam, image, predictions, config):
             continue
         if p["tagName"] not in classes or not _is_fresh(cam, p):
             continue
-        if (p.get("probability") or 0) >= ceiling:
-            logger.debug("%s: %s at %.2f is above the %.2f ceiling, not asking",
-                         cam.name, p["tagName"], p["probability"], ceiling)
+        bar = ceiling_for(p["tagName"])
+        if (p.get("probability") or 0) >= bar:
+            logger.info("%s: %s at %.2f is above the %.2f ceiling, not asking",
+                        cam.name, p["tagName"], p["probability"], bar)
             continue
 
         hit = _cached(cam, p, iou_floor, now)

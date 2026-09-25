@@ -790,3 +790,49 @@ def test_package_is_a_label_the_model_may_answer():
     false one on the same camera scored 0.804."""
     assert "package" in verify.LABELS
     assert "package" not in verify.MUTUALLY_EXCLUSIVE
+
+
+def _cfg(pairs):
+    c = configparser.ConfigParser()
+    c["verify"] = dict({"enabled": "true", "api-key": "x",
+                        "classes": "dog,deer,person"}, **pairs)
+    return c
+
+
+def test_a_class_ceiling_skips_the_confident_ones():
+    """3,511 dog detections went for a second opinion and the model never
+    once disagreed with the 475 at 0.91 or above. Paying to confirm those is
+    paying for an answer already known."""
+    asked = []
+    cam = mock.Mock(name="deck")
+    cam.name = "deck"
+    preds = [{"tagName": "dog", "probability": 0.94,
+              "boundingBox": {"left": .3, "top": .3, "width": .2, "height": .2}},
+             {"tagName": "dog", "probability": 0.72,
+              "boundingBox": {"left": .6, "top": .3, "width": .2, "height": .2}}]
+    with mock.patch.object(verify, "_is_fresh", return_value=True), \
+         mock.patch.object(verify, "_cached", return_value=None), \
+         mock.patch.object(verify, "crop", return_value=b"jpeg"), \
+         mock.patch.object(verify, "ask",
+                           side_effect=lambda *a, **k: asked.append(a) or
+                           {"label": "dog", "confidence": 0.99, "note": "a dog"}):
+        verify.verify_predictions(cam, None, preds, _cfg({"max-score-dog": "0.91"}))
+    assert len(asked) == 1, "the 0.94 detection should not have been asked about"
+
+
+def test_the_ceiling_is_per_class():
+    """A deer at 0.96 is as likely to be scenery as one at 0.51 -- the whole
+    reason the global ceiling defaults off."""
+    asked = []
+    cam = mock.Mock(name="swing")
+    cam.name = "swing"
+    preds = [{"tagName": "deer", "probability": 0.96,
+              "boundingBox": {"left": .3, "top": .3, "width": .2, "height": .2}}]
+    with mock.patch.object(verify, "_is_fresh", return_value=True), \
+         mock.patch.object(verify, "_cached", return_value=None), \
+         mock.patch.object(verify, "crop", return_value=b"jpeg"), \
+         mock.patch.object(verify, "ask",
+                           side_effect=lambda *a, **k: asked.append(a) or
+                           {"label": "nothing", "confidence": 0.97, "note": "brush"}):
+        verify.verify_predictions(cam, None, preds, _cfg({"max-score-dog": "0.91"}))
+    assert len(asked) == 1, "a dog ceiling must not silence the deer question"

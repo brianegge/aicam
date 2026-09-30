@@ -131,6 +131,18 @@ class HomeAssistant:
     def vacation_mode(self) -> bool:
         return self.get_state("input_boolean.vacation_mode")
 
+    def pet_sitter_mode(self) -> bool:
+        """The sitter is looking after the dog, so the dog is not news.
+
+        Unreachable Home Assistant answers False: a dog alert too many is
+        better than none while nobody else is watching.
+        """
+        try:
+            return self.get_state("input_boolean.pet_sitter_mode")
+        except RuntimeError:
+            log.warning("Could not read pet_sitter_mode; notifying dogs")
+            return False
+
     def echo_speaks(self, message: str) -> Any:
         if self.get_presence("group.egge"):
             log.info("Speaking {}".format(message))

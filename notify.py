@@ -199,6 +199,7 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
         len(list(filter(lambda p: p["tagName"] == "dog_road", predictions))) > 0
     )
     dog_inside = ha.is_dog_inside() if (has_dog or has_dog_road) else False
+    pet_sitter = ha.pet_sitter_mode() if has_dog else False
     packages = list(
         filter(lambda p: p["tagName"] == "package" and "departed" not in p, predictions)
     )
@@ -268,6 +269,13 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
             # we are still outside, keep detection off
             # ha.suppress_notify_person()
             i_type = "person detection off"
+        elif tagName == "dog" and pet_sitter:
+            # The sitter walks and lets out the dog all day; each of those is
+            # an alert nobody at home needs. dog_road is a different class
+            # and still alerts: a dog on the road with no one beside it has
+            # got out, sitter or not.
+            i = -4
+            i_type = "pet sitter mode"
         elif tagName == "deer" and has_person:
             i = -1
             # this should never occur

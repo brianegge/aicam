@@ -44,6 +44,7 @@ def _ha():
     ha.should_notify_person.return_value = True
     ha.should_notify_vehicle.return_value = True
     ha.is_dog_inside.return_value = False
+    ha.pet_sitter_mode.return_value = False
     return ha
 
 
@@ -264,3 +265,45 @@ class TestReviewPage:
 
     def test_the_page_link_fits_pushovers_limit(self, tmp_path):
         assert len(self._with_page(tmp_path)["url"]) <= 512
+
+
+def _dog(tag="dog", **extra):
+    p = {"tagName": tag, "probability": 0.84, "camName": "deck",
+         "boundingBox": {"left": 0.4, "top": 0.4, "width": 0.2, "height": 0.2},
+         "center": {"x": 0.5, "y": 0.5}}
+    p.update(extra)
+    return p
+
+
+class TestPetSitter:
+    """The sitter let the dog out and the deck and west lawn sent
+    three dog alerts in a minute. With pet sitter mode on, a dog is not news."""
+
+    def _run(self, predictions, tmp_path, sitter):
+        ha = _ha()
+        ha.pet_sitter_mode.return_value = sitter
+        return _notify(ha, predictions, tmp_path), ha
+
+    def test_a_dog_is_not_sent_while_the_sitter_is_here(self, tmp_path):
+        priority, _ = self._run([_dog()], tmp_path, sitter=True)
+        assert priority == -4
+
+    def test_a_dog_is_sent_as_before_otherwise(self, tmp_path):
+        priority, _ = self._run([_dog()], tmp_path, sitter=False)
+        assert priority == 0
+
+    def test_a_dog_loose_on_the_road_still_alerts(self, tmp_path):
+        priority, _ = self._run([_dog("dog_road")], tmp_path, sitter=True)
+        assert priority == 1
+
+    def test_only_a_dog_asks_home_assistant(self, tmp_path):
+        _, ha = self._run([_cat()], tmp_path, sitter=True)
+        ha.pet_sitter_mode.assert_not_called()
+
+
+def test_an_unreachable_home_assistant_still_notifies_dogs():
+    import homeassistant
+    ha = homeassistant.HomeAssistant.__new__(homeassistant.HomeAssistant)
+    with mock.patch.object(ha, "get_state", side_effect=RuntimeError("down"),
+                           create=True):
+        assert ha.pet_sitter_mode() is False

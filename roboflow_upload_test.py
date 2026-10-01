@@ -164,7 +164,8 @@ class TestSilencing:
                                       "peach_tree-deer-11-22.yaml"))
         assert doc["provisional"] is True
         assert sorted(doc["models"]) == ["ipcams_v32.onnx", "packages_v11.onnx"]
-        assert doc["camera"] == "peach tree" and doc["label"] == "deer"
+        assert doc["camera"] == "peach tree" and doc["label"] == "*"
+        assert doc["seen_as"] == "deer"
         assert doc["box"]["left"] == 0.1
 
     def test_a_live_exclusion_is_loaded_and_survives_its_own_models(self, review, api):
@@ -172,7 +173,7 @@ class TestSilencing:
         roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
         loaded = excludes.load_dir(roboflow_upload._config.auto_dir,
                                    ["ipcams_v32.onnx", "packages_v11.onnx"])
-        assert loaded["peach tree"]["deer"][0]["left"] == 0.1
+        assert loaded["peach tree"]["*"][0]["left"] == 0.1
 
     def test_a_retrain_puts_the_blind_spot_back_on_trial(self, review, api):
         """The whole expiry rule: a new model set means it stops applying."""
@@ -379,10 +380,27 @@ class TestRoadLabels:
         assert boxes[0][0] == "person"
 
     def test_the_exclusion_keeps_the_road_label(self, review, api):
-        """detect.py compares excludes against the renamed tag, not the base."""
+        """The name and seen_as keep what detect.py called it; the match is "*"."""
         _rewrite_boxes(review, [{"label": "person_road", "left": 0.1, "top": 0.1,
                                  "width": 0.02, "height": 0.03, "probability": 0.54}])
         roboflow_upload._do_upload("abc123.jpg|false", "", "", {"person_road"})
         doc = _load_yaml(os.path.join(roboflow_upload._config.auto_dir,
                                       "peach_tree-person_road-11-12.yaml"))
-        assert doc["label"] == "person_road"
+        assert doc["seen_as"] == "person_road" and doc["label"] == "*"
+
+    def test_one_rock_is_one_exclusion_whatever_it_is_called(self, review, api):
+        """rabbit-40-85, rabbit-40-86, raccoon-40-86: one rock, three files."""
+        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        _rewrite_boxes(review, [{"label": "raccoon", "left": 0.1, "top": 0.2,
+                                 "width": 0.02, "height": 0.04, "probability": 0.7}])
+        code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        yamls = [f for f in os.listdir(roboflow_upload._config.auto_dir)
+                 if f.endswith(".yaml")]
+        assert yamls == ["peach_tree-deer-11-22.yaml"]
+
+    def test_a_tap_exclusion_suppresses_every_class(self, review, api):
+        import excludes
+        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        loaded = excludes.load_dir(roboflow_upload._config.auto_dir,
+                                   ["ipcams_v32.onnx", "packages_v11.onnx"])
+        assert list(loaded["peach tree"]) == ["*"]

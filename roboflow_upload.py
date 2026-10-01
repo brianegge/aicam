@@ -259,7 +259,9 @@ def current_models(config_path):
 
 
 _PROVISIONAL_HEAD = """# PROVISIONAL -- written by an "all false" tap on %(created)s, from one frame.
-# It suppresses %(label)s at this spot right now, and stops the moment the
+# It suppresses anything at this spot right now -- it was seen as %(label)s,
+# and the label is "*" because one rock reads as any number of classes --
+# and stops the moment the
 # model set changes: the same tap uploaded the frame to Roboflow as a
 # background example, so the next retrain is what should make it unnecessary,
 # and excludes.load_dir drops this file as soon as the models it names are no
@@ -286,6 +288,13 @@ def write_exclusion(directory, cam, filename, box, score, model, image_bytes,
     directory nothing reads. The frame travels either way: recheck_excludes.py
     replays the paired jpg, and delete-after-upload is about to remove the
     original.
+
+    The label is "*", whatever the detector called it: detect.py applies a
+    "*" exclusion to every class. One rock in the peach tree's lawn was
+    rabbit 28 times, fox 10 and raccoon 7 in two nights, and taps filed it
+    as rabbit-40-85, rabbit-40-86 and raccoon-40-86 -- a per-class
+    exclusion only waits for the next class. What it was seen as stays in
+    the name and in `seen_as`.
     """
     label = box.get("label") or "object"
     stem = "%s-%s-%02d-%02d" % (
@@ -301,7 +310,8 @@ def write_exclusion(directory, cam, filename, box, score, model, image_bytes,
             else _CANDIDATE_HEAD % {"created": created, "why": why or "no reason given"})
     doc = head + (
         "camera: %s\n"
-        "label: %s\n"
+        "label: \"*\"\n"
+        "seen_as: %s\n"
         "comment: %s\n"
         "box:\n"
         "  left: %.8f\n"
@@ -335,7 +345,7 @@ def write_exclusion(directory, cam, filename, box, score, model, image_bytes,
 
 
 def already_silenced(directory, cam, box):
-    """True if a live exclusion here already covers this box for this label.
+    """True if a live exclusion here already covers this box, for any class.
 
     detect.py suppresses at IoU > 0.5, so anything above that is the same spot
     and a second file would only be another name for it.
@@ -348,7 +358,7 @@ def already_silenced(directory, cam, box):
         try:
             with open(fn) as f:
                 doc = yaml.safe_load(f) or {}
-            if doc.get("camera") != cam or doc.get("label") != box.get("label"):
+            if doc.get("camera") != cam:
                 continue
             if bb_intersection_over_union(
                     {k: float(doc["box"][k]) for k in ("left", "top", "width", "height")},

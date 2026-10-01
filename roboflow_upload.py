@@ -42,6 +42,10 @@ class Config(object):
         self.delete_after_upload = section.getboolean("delete-after-upload", True)
         self.save_path = config["detector"]["save-path"]
         self.review_dir = os.path.join(self.save_path, "review")
+        # What each tap did, so a second tap on the same alert can say so --
+        # see handled(). Beside review/, not in it: cleanup-capture.sh ages
+        # review/ file by file, and this is rewritten on every tap.
+        self.handled_path = os.path.join(self.save_path, "review-handled.json")
         # Exclusions written by an "all false" tap. Beside the captures, never
         # in the checkout: `excludes/` is audited geometry under version
         # control, and a deploy's `git stash -u` once swept every untracked
@@ -402,6 +406,48 @@ def silence(cam, filename, box, model, image_bytes):
         image_bytes, models=current_models(_config.config_path)), True)
 
 
+HANDLED_DAYS = 30
+
+
+def _load_handled():
+    try:
+        with open(_config.handled_path) as f:
+            got = json.load(f)
+        return got if isinstance(got, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def handled(filename):
+    """What an earlier tap on this frame did, or None.
+
+    A tap deletes the frame once it is uploaded, so a second tap on the same
+    alert -- from the notification, or the review page -- used to answer
+    "file not found". On 2026-10-01 a front lawn rabbit was marked false at
+    03:12 and silenced; the same alert tapped again at 07:59 read as a
+    failure, when the verdict had already done everything it could.
+    """
+    return _load_handled().get(filename)
+
+
+def remember_handled(filename, result):
+    """Record what a tap did; entries older than HANDLED_DAYS fall away."""
+    now = datetime.datetime.now()
+    cutoff = (now - datetime.timedelta(days=HANDLED_DAYS)).isoformat(timespec="seconds")
+    ledger = {k: v for k, v in _load_handled().items()
+              if isinstance(v, dict) and v.get("when", "") >= cutoff}
+    ledger[filename] = {"when": now.isoformat(timespec="seconds"),
+                        "verdict": result.get("verdict"),
+                        "message": tap_message(200, result, filename)}
+    tmp = _config.handled_path + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(ledger, f, indent=1, sort_keys=True)
+        os.replace(tmp, _config.handled_path)
+    except OSError as e:
+        logger.warning("could not record the tap on %s: %s", filename, e)
+
+
 def _do_upload(filename, model, cam, detection_tags, verdict=None):
     """Upload a review image to Roboflow. Returns (status_code, result_dict)."""
     filename, from_name = split_verdict(filename)
@@ -411,6 +457,12 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
     filepath = os.path.join(_config.review_dir, filename)
 
     if not os.path.isfile(filepath):
+        earlier = handled(filename)
+        if earlier:
+            return (200, {"status": "already", "file": filename,
+                          "verdict": earlier.get("verdict"),
+                          "when": earlier.get("when"),
+                          "message": earlier.get("message")})
         return (404, {"error": "file not found: %s" % filename})
 
     sidecar = read_sidecar(_config.review_dir, filename)
@@ -514,6 +566,7 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
         result["silenced"] = silenced
     if pending:
         result["pending_exclusions"] = pending
+    remember_handled(filename, result)
     return (200, result)
 
 
@@ -522,6 +575,14 @@ def tap_message(code, result, filename):
     if code != 200:
         return "%s: %s" % (os.path.basename(filename or "?"),
                            result.get("error", "upload failed"))
+    if result.get("status") == "already":
+        try:
+            at = datetime.datetime.fromisoformat(result["when"])
+            when = at.strftime("%H:%M") if at.date() == datetime.date.today() \
+                else at.strftime("%b %-d %H:%M")
+        except (KeyError, TypeError, ValueError):
+            when = "earlier"
+        return "Already done at %s: %s" % (when, result.get("message") or result.get("verdict"))
     verdict = result.get("verdict", "flag")
     where = ", ".join(result.get("projects") or ()) or "nowhere"
     if verdict == "correct":

@@ -9,6 +9,7 @@ routing between them is worth testing even though the uploads themselves are
 somebody else's HTTP.
 """
 
+import datetime
 import json
 import logging
 import os
@@ -237,6 +238,31 @@ class TestSilencingGuards:
         live = [f for f in os.listdir(roboflow_upload._config.auto_dir)
                 if f.startswith("peach_tree-") and f.endswith(".yaml")]
         assert len(live) == 12
+
+
+class TestRepeatTap:
+    def test_a_second_tap_says_what_the_first_did(self, review, api):
+        """The front lawn rabbit: false at 03:12, tapped again at 07:59."""
+        roboflow_upload._config.delete_after_upload = True
+        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        assert code == 200 and result["status"] == "already"
+        msg = roboflow_upload.tap_message(code, result, "abc123.jpg")
+        assert msg.startswith("Already done at ")
+        assert "silenced peach_tree-deer-11-22" in msg
+        assert api["upload"].call_count == 1
+
+    def test_a_frame_nobody_tapped_is_still_not_found(self, review, api):
+        code, result = roboflow_upload._do_upload("nothere.jpg|false", "", "", set())
+        assert code == 404
+
+    def test_old_entries_fall_away(self, review, api):
+        old = (datetime.datetime.now() - datetime.timedelta(days=40)).isoformat()
+        with open(roboflow_upload._config.handled_path, "w") as f:
+            json.dump({"stale.jpg": {"when": old, "verdict": "false", "message": "m"}}, f)
+        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        ledger = json.load(open(roboflow_upload._config.handled_path))
+        assert sorted(ledger) == ["abc123.jpg"]
 
 
 class TestCleanup:

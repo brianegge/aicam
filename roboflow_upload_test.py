@@ -225,16 +225,17 @@ class TestSilencingGuards:
         # pending/ is a subdirectory and load_dir does not recurse.
         assert excludes.load_dir(roboflow_upload._config.auto_dir, ["ipcams_v32.onnx"]) == {}
 
-    def test_a_camera_may_only_collect_so_many(self, review, api):
-        roboflow_upload._config.max_exclusions_per_camera = 1
-        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
-        _rewrite_boxes(review, [{"label": "deer", "left": 0.8, "top": 0.8,
-                                 "width": 0.05, "height": 0.05, "probability": 0.6}])
-        code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
-        assert result["pending_exclusions"] == ["peach_tree-deer-83-83"]
-        doc = open(os.path.join(roboflow_upload._config.pending_dir,
-                                "peach_tree-deer-83-83.yaml")).read()
-        assert "already has 1 silenced spots" in doc
+    def test_a_camera_may_collect_any_number(self, review, api):
+        """The peach tree reached the old cap of 8 in three days."""
+        for i in range(12):
+            x = 0.02 + i * 0.08
+            _rewrite_boxes(review, [{"label": "deer", "left": x, "top": 0.8,
+                                     "width": 0.05, "height": 0.05, "probability": 0.6}])
+            code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+            assert not result.get("pending_exclusions"), i
+        live = [f for f in os.listdir(roboflow_upload._config.auto_dir)
+                if f.startswith("peach_tree-") and f.endswith(".yaml")]
+        assert len(live) == 12
 
 
 class TestCleanup:

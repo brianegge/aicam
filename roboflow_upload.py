@@ -48,12 +48,11 @@ class Config(object):
         # file in the repo. aicam loads this directory too.
         self.auto_dir = config["detector"].get(
             "excludes-auto-dir", os.path.join(self.save_path, "excludes-auto"))
-        # Where a tap lands when a guard says the box is too big to silence, or
-        # the camera has too many already. load_dir globs *.yaml and does not
-        # recurse, so nothing here suppresses anything.
+        # Where a tap lands when the guard says the box is too big to silence.
+        # load_dir globs *.yaml and does not recurse, so nothing here
+        # suppresses anything.
         self.pending_dir = os.path.join(self.auto_dir, "pending")
         self.max_exclusion_area = section.getfloat("auto-exclude-max-area", 0.02)
-        self.max_exclusions_per_camera = section.getint("auto-exclude-max-per-camera", 8)
         self.config_path = None
         # A tap gets no answer from Home Assistant: a webhook automation
         # returns an empty body whatever it does (verified against 2026.9.2
@@ -364,11 +363,18 @@ def silence(cam, filename, box, model, image_bytes):
     """Act on "all false": stop this false positive firing, or say why not.
 
     Returns (stem, live) -- live is False when a guard sent it to pending/
-    instead. The guards are the whole reason this is not just a file write. An
+    instead. The guard is the reason this is not just a file write. An
     exclusion is a blind spot, and one tap is one frame of evidence: a box
-    covering a quarter of the frame, or the ninth on one camera, is more likely
-    a detector having a bad day than a rock, and silencing it would cost real
-    detections that nobody would notice going missing.
+    covering a quarter of the frame is more likely a detector having a bad day
+    than a rock, and silencing it would cost real detections that nobody would
+    notice going missing.
+
+    There is no count per camera. There was (8), and the peach tree reached it
+    in three days, after which four taps -- coyote, dog_road, rabbit, raccoon
+    -- were confirmed as "held back, not silenced" and kept firing. Small
+    spots are cheap, and they expire on their own: each carries the models it
+    was written against, so a retrain drops them all and recheck_excludes.py
+    says which are still needed.
     """
     area = float(box.get("width", 0)) * float(box.get("height", 0))
     if area > _config.max_exclusion_area:
@@ -381,14 +387,6 @@ def silence(cam, filename, box, model, image_bytes):
     if existing:
         logger.info("%s on %s is already silenced by %s", box.get("label"), cam, existing)
         return (os.path.splitext(existing)[0], True)
-    mine = [fn for fn in glob.glob(os.path.join(_config.auto_dir, "*.yaml"))
-            if os.path.basename(fn).startswith(_slug(cam) + "-")]
-    if len(mine) >= _config.max_exclusions_per_camera:
-        return (write_exclusion(
-            _config.pending_dir, cam, filename, box, box.get("probability"),
-            model, image_bytes,
-            why="%s already has %d silenced spots, the most a tap may add"
-                % (cam, len(mine))), False)
     return (write_exclusion(
         _config.auto_dir, cam, filename, box, box.get("probability"), model,
         image_bytes, models=current_models(_config.config_path)), True)

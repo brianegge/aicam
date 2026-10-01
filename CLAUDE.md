@@ -190,13 +190,17 @@ STILL NEEDED means audit it properly and move the pair into `excludes/` without
 the provisional keys. If the false positive simply comes back, that is the
 honest answer and it costs one more tap.
 
-Two guards, both landing in `excludes-auto/pending/` (not loaded — `load_dir`
+One guard, landing in `excludes-auto/pending/` (not loaded — `load_dir`
 does not recurse) with the reason written into the file:
 
 - `auto-exclude-max-area` (default 0.02) — a box over 2% of the frame is more
   likely a detector having a bad day than a rock, and silencing it would cost
   real detections nobody would notice going missing.
-- `auto-exclude-max-per-camera` (default 8).
+
+There is **no per-camera count** (there was one, 8, removed 2026-10-01: the
+peach tree hit it in three days and taps stopped working there). The
+retrain is the limit — every tap-made exclusion expires with the model it was
+written against, and `recheck_excludes.py` above sorts what is still needed.
 
 A second tap on the same spot is recognised (IoU > 0.5, the same threshold
 `detect.py` suppresses at) and does not write a second file.

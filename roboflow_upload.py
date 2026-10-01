@@ -689,7 +689,10 @@ class UploadHandler(BaseHTTPRequestHandler):
         code, result = _do_upload(filename, model, cam, detection_tags, verdict)
         announce(code, result, filename)
 
-        if code == 200:
+        if code == 200 and result.get("status") == "already":
+            title = "Already Done"
+            body = "<p>%s</p>" % html.escape(tap_message(code, result, filename))
+        elif code == 200:
             title = _TITLES[result["verdict"]]
             body = "<p>Uploaded <b>%s</b> from <b>%s</b> to %s.</p>" % (
                 html.escape(os.path.basename(result["file"])),

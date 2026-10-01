@@ -252,6 +252,17 @@ class TestRepeatTap:
         assert "silenced peach_tree-deer-11-22" in msg
         assert api["upload"].call_count == 1
 
+    def test_the_page_answers_a_repeat_tap_too(self, review, api):
+        """The GET page assumed every 200 listed projects, and crashed."""
+        roboflow_upload._config.delete_after_upload = True
+        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        handler = mock.MagicMock()
+        handler.path = "/upload?file=abc123.jpg&v=false"
+        with mock.patch.object(roboflow_upload, "announce"):
+            roboflow_upload.UploadHandler.do_GET(handler)
+        page = handler.wfile.write.call_args[0][0].decode("utf-8")
+        assert "Already Done" in page and "silenced peach_tree-deer-11-22" in page
+
     def test_a_frame_nobody_tapped_is_still_not_found(self, review, api):
         code, result = roboflow_upload._do_upload("nothere.jpg|false", "", "", set())
         assert code == 404

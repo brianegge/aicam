@@ -147,7 +147,23 @@ def test_skip_and_delete(tmp_path):
     assert rev.classify(A2, fr.SKIP) == (200, {"message": "Left in the Train tab"})
     assert http.posts == [] and A2 in http.train
     code, res = rev.classify(A2, fr.DELETE)
-    assert code == 200 and res["message"] == "Deleted" and A2 not in http.train
+    assert code == 200 and res["message"] == "Not a face, removed" and A2 not in http.train
+
+
+@pytest.mark.parametrize("answer,said", [(fr.CANT_TELL, "Can't tell"), (fr.VISITOR, "Visitor")])
+def test_cant_tell_and_visitor_remove_without_training(tmp_path, answer, said):
+    http = FakeHTTP([A2], {})
+    rev = make(tmp_path, http)
+    code, res = rev.classify(A2, answer)
+    assert code == 200 and res["message"].startswith(said)
+    assert http.posts[0][0].endswith("/api/faces/train/delete")   # never /classify
+    assert A2 not in http.train
+
+
+def test_unknown_reserved_answer_is_refused(tmp_path):
+    http = FakeHTTP([A2], {})
+    assert make(tmp_path, http).classify(A2, "__oops__")[0] == 400
+    assert http.posts == []
 
 
 def test_page_link_drops_names_to_fit_pushover():

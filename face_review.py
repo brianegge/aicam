@@ -15,8 +15,8 @@ the same job through the channel aicam alerts already use:
 `cam` carries the person's name because the webhook forwards exactly four
 fields (file, model, cam, tags) and changing that means editing YAML on the
 Home Assistant box -- see CLAUDE.md, "A webhook automation cannot answer the
-phone". Two reserved names: SKIP leaves the face in the Train tab, DELETE
-removes it (not a face, or nobody worth naming).
+phone". Reserved names: SKIP leaves the face in the Train tab; DELETE,
+CANT_TELL and VISITOR remove it without training (see DISCARD).
 
 Configured by an optional `[face-review]` section; without one nothing runs.
 """
@@ -35,6 +35,17 @@ logger = logging.getLogger(__name__)
 
 SKIP = "__skip__"
 DELETE = "__delete__"
+CANT_TELL = "__cant_tell__"
+VISITOR = "__visitor__"
+# Answers that take a face out of the Train tab without teaching Frigate
+# anything. A visitor (the UPS driver) is a real face, but naming one would
+# put a stranger in the library the cameras compare everyone against; one
+# blurred past recognition is no use either. Both just go.
+DISCARD = {
+    DELETE: "Not a face, removed",
+    CANT_TELL: "Can't tell, removed without training",
+    VISITOR: "Visitor, removed without training",
+}
 
 # Pushover's own caps (see notify.py): url 512 chars, attachment 2.5 MB.
 URL_LIMIT = 512
@@ -246,6 +257,8 @@ class FaceReview(object):
         """Act on a tap. Returns (http_code, result) like roboflow_upload._do_upload."""
         filename = os.path.basename(filename or "")
         name = (name or "").strip()
+        if name.startswith("__") and name not in DISCARD and name != SKIP:
+            return 400, {"error": "unknown answer %s" % name}
         if not filename or not name:
             return 400, {"error": "a face tap needs a file and a name"}
         if name == SKIP:
@@ -258,10 +271,10 @@ class FaceReview(object):
             # Classified or deleted already -- from another tap, or in the GUI.
             return 200, {"message": "Already handled"}
         try:
-            if name == DELETE:
+            if name in DISCARD:
                 r = self.http.post(self.cfg.frigate_url + "/api/faces/train/delete",
                                    json={"ids": [filename]}, timeout=15)
-                done = "Deleted"
+                done = DISCARD[name]
             else:
                 r = self.http.post("%s/api/faces/train/%s/classify" % (self.cfg.frigate_url, quote(name)),
                                    json={"training_file": filename}, timeout=15)

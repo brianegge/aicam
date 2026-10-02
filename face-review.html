@@ -40,6 +40,7 @@
  input{flex:1;min-width:0;padding:14px;font-size:17px;border-radius:12px;
        border:1px solid #333;background:#1c1c1e;color:#eee}
  .row button{width:auto;padding:14px 18px}
+ .note{color:#888;font-size:13px;margin:22px 2px 8px}
  #out{margin-top:20px;padding:14px;border-radius:10px;background:#1c1c1e;
       font-size:15px;color:#ddd;display:none}
 </style>
@@ -55,9 +56,11 @@
  <button id="add">Add</button>
 </div>
 
-<div class="grid" style="margin-top:14px">
- <button class="other" data-name="__skip__">Skip</button>
- <button class="del" data-name="__delete__">Not a face / delete</button>
+<p class="note">None of these train Frigate; each takes the face out of the Train tab.</p>
+<div class="grid">
+ <button class="other" data-name="__cant_tell__">Can't tell</button>
+ <button class="other" data-name="__visitor__">Visitor, don't train</button>
+ <button class="del" data-name="__delete__" style="grid-column:span 2">Not a face</button>
 </div>
 
 <div id="out"></div>

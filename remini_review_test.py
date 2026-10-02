@@ -1,4 +1,5 @@
 import json
+import os
 from configparser import ConfigParser
 
 import cv2
@@ -158,3 +159,16 @@ def test_pretty_date():
     assert rr.pretty_date("2026-09-15") == "Sept 15"
     assert rr.pretty_date("2026-03-02") == "March 2"
     assert rr.pretty_date(None) == "today"
+
+
+def test_trim_removes_only_old_rejections(tmp_path):
+    r, http, clock = make(tmp_path)
+    no = r.add_candidate(jpeg(), [1, 1, 80, 80], source="no")[1]["id"]
+    yes = r.add_candidate(jpeg(), [1, 1, 80, 80], source="yes", share=False)[1]["id"]
+    r.confirm(no, "no"); r.confirm(yes, "yes")
+    clock.t += 29 * 86400
+    assert r.trim() == 0
+    clock.t += 2 * 86400
+    assert r.trim() == 1
+    left = sorted(os.listdir(r.cfg.dir))
+    assert left == sorted([yes + ".jpg", yes + ".json"])

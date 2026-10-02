@@ -298,7 +298,10 @@ imessage-chats = any;-;brianegge@gmail.com      # comma-separated chat guids
 ```
 
 State is one `<id>.json` + `<id>.jpg` per candidate in `<save-path>/remini/`
-(pending -> confirmed|rejected -> sent).
+(pending -> confirmed|rejected -> sent; `trained` for share=false). Rejected
+ones are deleted after `keep-rejected-days` (30); confirmed, trained and sent
+ones are kept -- they are the photos of her. ubuntu24's own copy of every
+downloaded photo is trimmed after 30 days unless it was a candidate.
 
 ## Logs
 ```bash

@@ -75,6 +75,10 @@ class ReminiReviewConfig(object):
         self.frigate_url = s.get("frigate-url", "http://192.168.254.31:5000").rstrip("/")
         self.bluebubbles_url = s.get("bluebubbles-url", "http://localhost:1234").rstrip("/")
         self.bluebubbles_db = s.get("bluebubbles-db", BLUEBUBBLES_DB)
+        # Rejected candidates (a classmate) are only worth keeping long enough
+        # to answer "Already answered" to a repeat tap. Confirmed, trained and
+        # sent ones stay: they are the photos of her.
+        self.rejected_days = s.getint("keep-rejected-days", 30)
         self.dir = s.get("dir", os.path.join(config["detector"]["save-path"], "remini"))
         self.pushover = (config["pushover"]["token"], config["pushover"]["user"]) \
             if config.has_section("pushover") else None
@@ -292,11 +296,33 @@ class ReminiReview(object):
                            files={"attachment": (os.path.basename(path), fh, "image/jpeg")}
                            ).raise_for_status()
 
+    def trim(self):
+        """Delete rejected candidates older than keep-rejected-days. Returns how many."""
+        cutoff = self.now() - self.cfg.rejected_days * 86400
+        gone = 0
+        with self.lock:
+            for m in self._all():
+                if m["state"] == "rejected" and m.get("answered", m.get("added", 0)) < cutoff:
+                    for ext in ("jpg", "json"):
+                        try:
+                            os.remove(self._path(m["id"], ext))
+                        except OSError:
+                            pass
+                    gone += 1
+        if gone:
+            logger.info("remini review: removed %d rejected candidate(s) older than %d days",
+                        gone, self.cfg.rejected_days)
+        return gone
+
     # ------------------------------------------------------------------ loop
     def run_forever(self):
+        last_trim = 0
         while True:
             try:
                 self.send_digest()
+                if self.now() - last_trim > 3600:
+                    self.trim()
+                    last_trim = self.now()
             except Exception:
                 logger.exception("remini review: digest failed")
             time.sleep(60)

@@ -261,6 +261,36 @@ Frigate's port 5000 directly (checked 2026-10-01).
 Install the page like review.html: copy `face-review.html` to Home Assistant's
 `/config/www/`.
 
+## Remini photo confirmation (`remini_review.py`)
+
+The preschool posts ~100 photos a day to Remini; `remini-chloe` on ubuntu24
+(which holds the Remini login) downloads them, runs each face through
+Frigate's classifier, and POSTs candidates to `/remini/candidate` here as
+JSON `{image: base64 jpeg, box: [x,y,w,h], score, source, date}`.
+
+Frigate is **not trusted to decide**: on the 2026-09 test weeks the large
+model still called a classmate "Chloe" at 0.90-0.94 about twice a day, and its
+score did not separate those from her (0.90-0.97 both). So each candidate is a
+Pushover "Is this Chloe?" with the face boxed, linking to
+`remini-review.html`; Yes/No ride the same webhook as `model=remini`,
+`file=<id>`, `cam=yes|no`. **Yes also registers the padded face crop with
+Frigate** (`train-on-confirm`), so confirmations improve the library.
+
+Confirmed photos go out over iMessage as one batch once nothing is pending and
+the last answer is `digest-delay-minutes` (15) old -- through BlueBubbles on
+this Mac, whose password is read from its own `config.db` at send time, not
+copied into config.txt.
+
+```
+[remini-review]
+page-url = https://<nabu-casa>/local/remini-review.html
+imessage-chats = any;-;brianegge@gmail.com      # comma-separated chat guids
+# name = Chloe / digest-delay-minutes = 15 / train-on-confirm = true
+```
+
+State is one `<id>.json` + `<id>.jpg` per candidate in `<save-path>/remini/`
+(pending -> confirmed|rejected -> sent).
+
 ## Logs
 ```bash
 # View aicam logs

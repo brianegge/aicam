@@ -30,6 +30,7 @@ except ImportError:
     from urllib import urlencode
 
 import face_review
+import remini_review
 from excludes import slug as _slug
 from utils import bb_intersection_over_union
 
@@ -201,6 +202,8 @@ def annotate_null(api_key, project_id, image_id, name, width, height):
 _config = None
 # Frigate face review (face_review.py); None unless [face-review] is configured.
 _face_review = None
+# Remini photo confirmation (remini_review.py); None unless [remini-review] is configured.
+_remini = None
 
 # What a tap on the phone can say about a frame.
 #   flag    -- upload it unannotated, label it by hand later (the original)
@@ -575,10 +578,11 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
 
 def tap_message(code, result, filename):
     """One line saying what the tap did. Short: it lands on a lock screen."""
-    if result.get("face"):
-        if code != 200:
-            return "Face: %s" % result.get("error", "failed")
-        return "Face: %s" % result.get("message", "done")
+    for key, label in (("face", "Face"), ("remini", "Remini")):
+        if result.get(key):
+            if code != 200:
+                return "%s: %s" % (label, result.get("error", "failed"))
+            return "%s: %s" % (label, result.get("message", "done"))
     if code != 200:
         return "%s: %s" % (os.path.basename(filename or "?"),
                            result.get("error", "upload failed"))
@@ -617,6 +621,24 @@ def _do_face(filename, name):
         code, result = _face_review.classify(filename, name)
     result["face"] = True
     return code, result
+
+
+def _do_remini(filename, answer):
+    """A tap from remini-review.html: model=remini, cam=yes|no."""
+    if _remini is None:
+        code, result = 404, {"error": "Remini review is not configured here"}
+    else:
+        code, result = _remini.confirm(filename, answer)
+    result["remini"] = True
+    return code, result
+
+
+def _route_tap(filename, model, cam, detection_tags, verdict):
+    if model == "face":
+        return _do_face(filename, cam)
+    if model == "remini":
+        return _do_remini(filename, cam)
+    return _do_upload(filename, model, cam, detection_tags, verdict)
 
 
 def announce(code, result, filename):
@@ -703,8 +725,8 @@ class UploadHandler(BaseHTTPRequestHandler):
         detection_tags = set(tags_str.split(",")) if tags_str else set()
         verdict = params.get("v", [None])[0]
 
-        if model == "face":
-            code, result = _do_face(filename, cam)
+        if model in ("face", "remini"):
+            code, result = _route_tap(filename, model, cam, detection_tags, verdict)
             announce(code, result, filename)
             self._respond(code, result)
             return
@@ -771,6 +793,9 @@ class UploadHandler(BaseHTTPRequestHandler):
         self.wfile.write(blob)
 
     def do_POST(self):
+        if self.path == "/remini/candidate":
+            self._remini_candidate()
+            return
         if self.path != "/upload":
             self._respond(404, {"error": "not found"})
             return
@@ -796,11 +821,23 @@ class UploadHandler(BaseHTTPRequestHandler):
             self._respond(400, {"error": "missing 'file' field"})
             return
 
-        if model == "face":
-            code, result = _do_face(filename, cam)
-        else:
-            code, result = _do_upload(filename, model, cam, detection_tags, verdict)
+        code, result = _route_tap(filename, model, cam, detection_tags, verdict)
         announce(code, result, filename)
+        self._respond(code, result)
+
+    def _remini_candidate(self):
+        """From remini-chloe on the LAN: {image: base64 jpeg, box, score, source, date}."""
+        if _remini is None:
+            self._respond(404, {"error": "Remini review is not configured here"})
+            return
+        try:
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
+            image = base64.b64decode(body["image"])
+        except (KeyError, ValueError, TypeError) as e:
+            self._respond(400, {"error": "bad candidate: %s" % e})
+            return
+        code, result = _remini.add_candidate(image, body.get("box"), body.get("score"),
+                                             body.get("source"), body.get("date"))
         self._respond(code, result)
 
     def _respond(self, code, body):
@@ -840,6 +877,8 @@ def main():
     _config = Config(config)
     _config.config_path = args.config
     _face_review = face_review.start(config)
+    global _remini
+    _remini = remini_review.start(config)
     os.makedirs(_config.review_dir, exist_ok=True)
 
     server = HTTPServer(("", args.port), UploadHandler)

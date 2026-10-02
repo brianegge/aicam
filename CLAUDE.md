@@ -274,7 +274,12 @@ score did not separate those from her (0.90-0.97 both). So each candidate is a
 Pushover "Is this Chloe?" with the face boxed, linking to
 `remini-review.html`; Yes/No ride the same webhook as `model=remini`,
 `file=<id>`, `cam=yes|no`. **Yes also registers the padded face crop with
-Frigate** (`train-on-confirm`), so confirmations improve the library.
+Frigate** (`train-on-confirm`), so confirmations improve the library. **No
+files it under `negative-name` (default `Classmates`)**: with only adults
+beside her in the library, every unknown preschooler's nearest class was
+Chloe (or Kyle), so other children need a class of their own to land in. A
+candidate posted with `share: false` is a training question about an old
+photo -- Yes teaches Frigate but never reaches the iMessage batch.
 
 Confirmed photos go out over iMessage as one batch once nothing is pending and
 the last answer is `digest-delay-minutes` (15) old -- through BlueBubbles on

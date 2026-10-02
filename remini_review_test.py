@@ -92,7 +92,8 @@ def test_yes_trains_frigate_and_no_does_not(tmp_path):
     assert code == 200 and "taught to Frigate" in res["message"]
     assert http.registers == ["http://192.168.254.31:5000/api/faces/Chloe/register"]
     code, res = r.confirm(b, "no")
-    assert code == 200 and len(http.registers) == 1
+    assert code == 200 and res["message"] == "Not Chloe, filed under Classmates"
+    assert http.registers[1].endswith("/api/faces/Classmates/register")
     assert r.confirm(a, "yes")[1]["message"].startswith("Already answered")
     assert r.confirm(a, "maybe")[0] == 400
     assert r.confirm("missing", "yes")[0] == 404
@@ -120,3 +121,21 @@ def test_digest_quiet_period_after_last_yes(tmp_path):
     assert r.send_digest() == 0
     clock.t += 60
     assert r.send_digest() == 1
+
+
+def test_no_without_a_negative_class_just_drops(tmp_path):
+    r, http, _ = make(tmp_path, **{"negative-name": ""})
+    a = r.add_candidate(jpeg(), [1, 1, 80, 80], source="a")[1]["id"]
+    assert r.confirm(a, "no")[1]["message"] == "Not Chloe, dropped"
+    assert http.registers == []
+
+
+def test_training_only_candidate_teaches_but_is_never_shared(tmp_path):
+    r, http, clock = make(tmp_path)
+    a = r.add_candidate(jpeg(), [1, 1, 80, 80], source="old", date="2026-09-15", share=False)[1]["id"]
+    assert "training only" in http.pushes[0]["message"]
+    code, res = r.confirm(a, "yes")
+    assert res["message"] == "Chloe confirmed, and taught to Frigate (not shared)"
+    assert len(http.registers) == 1
+    clock.t += 3600
+    assert r.send_digest() == 0 and http.photos == []

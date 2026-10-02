@@ -52,6 +52,11 @@ class ReminiReviewConfig(object):
         self.digest_text = s.get("digest-text", "Here are some pics of %s from school today"
                                  % self.name)
         self.train_on_confirm = s.getboolean("train-on-confirm", True)
+        # "No" files the face here, so Frigate learns what not-her looks like. With
+        # only adults beside her in the library, every unknown preschooler's
+        # nearest class was Chloe (or Kyle); a class of other children gives them
+        # somewhere else to land. Empty to just drop a No.
+        self.negative_name = s.get("negative-name", "Classmates").strip()
         self.frigate_url = s.get("frigate-url", "http://192.168.254.31:5000").rstrip("/")
         self.bluebubbles_url = s.get("bluebubbles-url", "http://localhost:1234").rstrip("/")
         self.bluebubbles_db = s.get("bluebubbles-db", BLUEBUBBLES_DB)
@@ -100,7 +105,7 @@ class ReminiReview(object):
         return out
 
     # ------------------------------------------------------------------ candidate
-    def add_candidate(self, image_bytes, box, score=None, source=None, date=None):
+    def add_candidate(self, image_bytes, box, score=None, source=None, date=None, share=True):
         """Store a candidate and ask about it. Returns (code, result)."""
         img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
@@ -112,8 +117,10 @@ class ReminiReview(object):
         cid = uuid.uuid4().hex[:12]
         with open(self._path(cid, "jpg"), "wb") as f:
             f.write(image_bytes)
+        # share=False: a training question about an old photo. A Yes teaches
+        # Frigate but does not send weeks-old pictures out as "today".
         meta = {"id": cid, "state": "pending", "box": box, "score": score,
-                "source": source, "date": date, "added": self.now()}
+                "source": source, "date": date, "added": self.now(), "share": bool(share)}
         self._save(cid, meta)
         self._ask(cid, img, meta)
         return 200, {"id": cid, "status": "pending"}
@@ -134,6 +141,8 @@ class ReminiReview(object):
                                interpolation=cv2.INTER_AREA)
         ok, jpg = cv2.imencode(".jpg", shown, [cv2.IMWRITE_JPEG_QUALITY, 85])
         message = "Remini %s" % (meta.get("date") or "photo")
+        if not meta.get("share", True):
+            message += " (training only, not shared)"
         if meta.get("score") is not None:
             message += ", Frigate %.0f%%" % (100 * float(meta["score"]))
         token, user = self.cfg.pushover
@@ -167,17 +176,25 @@ class ReminiReview(object):
                 return 404, {"error": "no such photo %s" % cid}
             if meta["state"] != "pending":
                 return 200, {"message": "Already answered: %s" % meta["state"]}
-            meta["state"] = "confirmed" if answer == YES else "rejected"
+            if answer == NO:
+                meta["state"] = "rejected"
+            else:
+                meta["state"] = "confirmed" if meta.get("share", True) else "trained"
             meta["answered"] = self.now()
             self._save(cid, meta)
         if answer == NO:
+            if self.cfg.negative_name and self.cfg.train_on_confirm and \
+                    self._train(cid, meta, self.cfg.negative_name):
+                return 200, {"message": "Not %s, filed under %s" % (self.cfg.name, self.cfg.negative_name)}
             return 200, {"message": "Not %s, dropped" % self.cfg.name}
         trained = self._train(cid, meta) if self.cfg.train_on_confirm else False
-        return 200, {"message": "%s confirmed, in the next batch%s" % (
-            self.cfg.name, ", and taught to Frigate" if trained else "")}
+        taught = ", and taught to Frigate" if trained else ""
+        if not meta.get("share", True):
+            return 200, {"message": "%s confirmed%s (not shared)" % (self.cfg.name, taught)}
+        return 200, {"message": "%s confirmed, in the next batch%s" % (self.cfg.name, taught)}
 
-    def _train(self, cid, meta):
-        """Register the confirmed face with Frigate. A padded crop, so Frigate's own
+    def _train(self, cid, meta, name=None):
+        """Register the face with Frigate under `name` (default the child). A padded crop, so Frigate's own
         detector finds the face again -- a tight one comes back with no face."""
         img = cv2.imread(self._path(cid, "jpg"))
         if img is None or not meta.get("box"):
@@ -187,10 +204,11 @@ class ReminiReview(object):
         crop = img[max(0, y - m):y + h + m, max(0, x - m):x + w + m]
         ok, jpg = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
         try:
-            r = self.http.post("%s/api/faces/%s/register" % (self.cfg.frigate_url, quote(self.cfg.name)),
+            name = name or self.cfg.name
+            r = self.http.post("%s/api/faces/%s/register" % (self.cfg.frigate_url, quote(name)),
                                files={"file": ("face.jpg", jpg.tobytes(), "image/jpeg")}, timeout=30)
             if r.ok:
-                logger.info("remini review: taught %s's face from %s to Frigate", self.cfg.name, cid)
+                logger.info("remini review: taught Frigate %s from %s", name, cid)
                 return True
             logger.warning("remini review: Frigate would not register %s: %s", cid, r.text[:200])
         except requests.RequestException as e:

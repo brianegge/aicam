@@ -837,7 +837,8 @@ class UploadHandler(BaseHTTPRequestHandler):
             self._respond(400, {"error": "bad candidate: %s" % e})
             return
         code, result = _remini.add_candidate(image, body.get("box"), body.get("score"),
-                                             body.get("source"), body.get("date"))
+                                             body.get("source"), body.get("date"),
+                                             share=body.get("share", True))
         self._respond(code, result)
 
     def _respond(self, code, body):

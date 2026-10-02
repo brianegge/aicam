@@ -155,7 +155,7 @@ class ReminiReview(object):
         meta = {"id": cid, "state": "pending", "score": score,
                 "source": source, "date": date, "added": self.now(), "share": bool(share),
                 "caption": caption or "", "predicted": predicted, "label": label,
-                "faces": faces or []}
+                "faces": sorted(faces or [], key=lambda f: f["box"][0])}
         meta["box" if train else "box_shown"] = box
         self._save(cid, meta)
         self._ask(cid, img, meta)
@@ -167,7 +167,7 @@ class ReminiReview(object):
             return
         shown = img.copy()
         t = max(3, img.shape[1] // 300)
-        for f in meta.get("faces") or []:
+        for n, f in enumerate(meta.get("faces") or [], 1):
             # Every face, coloured by the model's call; Chloe drawn last-but-one
             # and thicker so she stands out in a crowd.
             x, y, w, h = f["box"]
@@ -175,6 +175,14 @@ class ReminiReview(object):
             colour = FACE_COLOURS.get(f.get("cls"), FACE_COLOURS["unknown"])
             cv2.rectangle(shown, (x - pad, y - pad), (x + w + pad, y + h + pad), colour,
                           t * 2 if f.get("cls") == "chloe" else t)
+            # The face's number, for "Face 2 is Chloe" on the page.
+            label = str(n)
+            scale = max(0.8, img.shape[1] / 1100.0)
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, scale, 2 * t // 3 + 1)
+            lx, ly = max(0, x - pad), max(th + 8, y - pad)
+            cv2.rectangle(shown, (lx, ly - th - 8), (lx + tw + 8, ly), colour, -1)
+            cv2.putText(shown, label, (lx + 4, ly - 4), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0),
+                        2 * t // 3 + 1, cv2.LINE_AA)
         if (meta.get("box") or meta.get("box_shown")) and not meta.get("faces"):
             x, y, w, h = meta.get("box") or meta["box_shown"]
             pad = max(4, int(0.15 * max(w, h)))
@@ -197,7 +205,9 @@ class ReminiReview(object):
         token, user = self.cfg.pushover
         page = self.cfg.page_url + ("&" if "?" in self.cfg.page_url else "?") + \
             urlencode({k: v for k, v in (("file", cid), ("name", self.cfg.name),
-                                         ("guess", meta.get("label"))) if v}, quote_via=quote)
+                                         ("guess", meta.get("label")),
+                                         ("faces", len(meta.get("faces") or []) or None)) if v},
+                      quote_via=quote)
         r = self.http.post("https://api.pushover.net/1/messages.json", timeout=30, data={
             "token": token, "user": user, "title": "Is this %s?" % self.cfg.name,
             "message": message, "priority": 0, "url": page,
@@ -220,14 +230,24 @@ class ReminiReview(object):
         answer = (answer or "").strip().lower()
         if cid == REST and answer == ACCEPT:
             return self.accept_rest()
+        face_no = None
+        if answer.startswith("face:"):
+            try:
+                face_no = int(answer[5:])
+            except ValueError:
+                return 400, {"error": "bad face number %s" % answer}
+            answer = YES
         if answer not in (YES, NO, NOT_A_FACE):
-            return 400, {"error": "answer must be yes, no or notface"}
+            return 400, {"error": "answer must be yes, no, notface or face:N"}
         with self.lock:
             meta = self._load(cid)
             if meta is None:
                 return 404, {"error": "no such photo %s" % cid}
             if meta["state"] != "pending":
                 return 200, {"message": "Already answered: %s" % meta["state"]}
+            faces = meta.get("faces") or []
+            if face_no is not None and not 1 <= face_no <= len(faces):
+                return 400, {"error": "no face %d in this photo" % face_no}
             if answer in (NO, NOT_A_FACE):
                 meta["state"] = "rejected"
             else:
@@ -242,6 +262,18 @@ class ReminiReview(object):
             taught = self.cfg.negative_name if self.cfg.negative_name and self.cfg.train_on_confirm \
                 and self._train(cid, meta, self.cfg.negative_name) else None
             message = "Not %s, %s" % (self.cfg.name, "filed under %s" % taught if taught else "dropped")
+        elif face_no is not None:
+            # A person pointed at her face: train on exactly that one, even on a
+            # photo-only (train=False) question -- the box is no longer a guess.
+            box = faces[face_no - 1]["box"]
+            taught = self.cfg.name if self.cfg.train_on_confirm and \
+                self._train(cid, dict(meta, box=box)) else None
+            with self.lock:
+                m2 = self._load(cid) or meta
+                m2["box"], m2["chloe_face"] = box, face_no
+                self._save(cid, m2)
+            message = "%s confirmed (face %d)%s" % (self.cfg.name, face_no,
+                                                    ", and taught to Frigate" if taught else "")
         else:
             taught = self.cfg.name if self.cfg.train_on_confirm and self._train(cid, meta) else None
             message = "%s confirmed%s%s" % (

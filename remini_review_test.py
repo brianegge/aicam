@@ -234,5 +234,19 @@ def test_every_face_is_boxed_in_its_class_colour(tmp_path, monkeypatch):
              {"box": [200, 10, 40, 40], "cls": "unknown"}]
     r.add_candidate(jpeg(), [10, 10, 40, 40], source="a", predicted="yes", label="Chloe 0.6",
                     train=False, faces=faces)
-    assert drawn == [rr.FACE_COLOURS["chloe"], rr.FACE_COLOURS["classmate"], rr.FACE_COLOURS["unknown"]]
+    assert drawn[::2] == [rr.FACE_COLOURS["chloe"], rr.FACE_COLOURS["classmate"], rr.FACE_COLOURS["unknown"]]  # box, then its number tag
     assert rr.LEGEND in http.pushes[0]["message"]
+
+
+def test_numbered_face_answer_trains_exactly_that_face(tmp_path):
+    r, http, _ = make(tmp_path)
+    faces = [{"box": [200, 10, 40, 40], "cls": "unknown"}, {"box": [10, 10, 40, 40], "cls": "classmate"}]
+    cid = r.add_candidate(jpeg(), [200, 10, 40, 40], source="a", predicted="no", label="x",
+                          train=False, faces=faces)[1]["id"]
+    assert "faces=2" in http.pushes[0]["url"]
+    assert r.confirm(cid, "face:3")[0] == 400                      # only two faces
+    code, res = r.confirm(cid, "face:2")                           # sorted left-to-right: x=200 is face 2
+    assert code == 200 and res["message"] == "Chloe confirmed (face 2), and taught to Frigate"
+    assert http.registers == ["http://192.168.254.31:5000/api/faces/Chloe/register"]
+    m = r._load(cid)
+    assert m["state"] == "confirmed" and m["box"] == [200, 10, 40, 40] and m["chloe_face"] == 2

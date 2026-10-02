@@ -14,6 +14,7 @@ from PIL import Image
 
 import alpr
 import autolabel
+import frigate_events
 import frigate_lpr
 import verify
 from alpr import ALPR_STATE_KEYS, wants_alpr
@@ -586,6 +587,12 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
             notify_start = timer()
             priority = notify(cam, message, im_pil, valid_predictions, config, ha, model_name=model_name, original_image=image)
             notify_time += timer() - notify_start
+            # Frigate's COCO model cannot see most of what this alerts on;
+            # without an event it keeps no clip. See frigate_events.py.
+            try:
+                frigate_events.mark(cam, valid_predictions, config)
+            except Exception:
+                logger.exception("frigate event for %s failed", cam.name)
         else:
             logger.info("Skipping notifications until after warm up")
             priority = -4

@@ -58,6 +58,12 @@ def pretty_date(date):
     return "%s %d" % (_MONTHS[d.month - 1], d.day)
 
 
+# Box colours (BGR) for a candidate's `faces`: every face in the photo, labelled
+# by the model, so a person sees at a glance who it thinks is who.
+FACE_COLOURS = {"chloe": (60, 200, 60), "classmate": (230, 130, 30), "unknown": (235, 235, 235)}
+LEGEND = "\U0001F7E9 Chloe  \U0001F7E6 Classmate  \u2B1C Unknown"
+
+
 class ReminiReviewConfig(object):
     def __init__(self, config):
         s = config["remini-review"]
@@ -128,7 +134,7 @@ class ReminiReview(object):
 
     # ------------------------------------------------------------------ candidate
     def add_candidate(self, image_bytes, box, score=None, source=None, date=None, share=True,
-                      caption=None, predicted=None, label=None, train=True):
+                      caption=None, predicted=None, label=None, train=True, faces=None):
         """Store a candidate and ask about it. Returns (code, result)."""
         img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
@@ -148,7 +154,8 @@ class ReminiReview(object):
         # this photo?") -- it may well be a classmate, so it must never register.
         meta = {"id": cid, "state": "pending", "score": score,
                 "source": source, "date": date, "added": self.now(), "share": bool(share),
-                "caption": caption or "", "predicted": predicted, "label": label}
+                "caption": caption or "", "predicted": predicted, "label": label,
+                "faces": faces or []}
         meta["box" if train else "box_shown"] = box
         self._save(cid, meta)
         self._ask(cid, img, meta)
@@ -159,7 +166,16 @@ class ReminiReview(object):
             logger.info("remini review: no Pushover configured, %s waits unasked", cid)
             return
         shown = img.copy()
-        if meta.get("box") or meta.get("box_shown"):
+        t = max(3, img.shape[1] // 300)
+        for f in meta.get("faces") or []:
+            # Every face, coloured by the model's call; Chloe drawn last-but-one
+            # and thicker so she stands out in a crowd.
+            x, y, w, h = f["box"]
+            pad = max(3, int(0.12 * max(w, h)))
+            colour = FACE_COLOURS.get(f.get("cls"), FACE_COLOURS["unknown"])
+            cv2.rectangle(shown, (x - pad, y - pad), (x + w + pad, y + h + pad), colour,
+                          t * 2 if f.get("cls") == "chloe" else t)
+        if (meta.get("box") or meta.get("box_shown")) and not meta.get("faces"):
             x, y, w, h = meta.get("box") or meta["box_shown"]
             pad = max(4, int(0.15 * max(w, h)))
             t = max(3, img.shape[1] // 300)
@@ -172,6 +188,8 @@ class ReminiReview(object):
         message = "Remini %s" % (meta.get("date") or "photo")
         if meta.get("label"):
             message = "Looks like: %s\n%s" % (meta["label"], message)
+        if meta.get("faces"):
+            message += "\n" + LEGEND
         if not meta.get("share", True):
             message += " (training only, not shared)"
         if meta.get("score") is not None:

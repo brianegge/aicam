@@ -223,3 +223,16 @@ def test_accept_rest_via_confirm_and_not_a_face(tmp_path):
     assert http.registers == []                       # not filed under Classmates
     assert r.confirm("__rest__", "accept")[0] == 200
     assert {m["id"]: m["state"] for m in r._all()}[a] == "rejected"
+
+
+def test_every_face_is_boxed_in_its_class_colour(tmp_path, monkeypatch):
+    drawn = []
+    real = rr.cv2.rectangle
+    monkeypatch.setattr(rr.cv2, "rectangle", lambda img, a, b, colour, t: drawn.append(colour) or real(img, a, b, colour, t))
+    r, http, _ = make(tmp_path)
+    faces = [{"box": [10, 10, 40, 40], "cls": "chloe"}, {"box": [100, 10, 40, 40], "cls": "classmate"},
+             {"box": [200, 10, 40, 40], "cls": "unknown"}]
+    r.add_candidate(jpeg(), [10, 10, 40, 40], source="a", predicted="yes", label="Chloe 0.6",
+                    train=False, faces=faces)
+    assert drawn == [rr.FACE_COLOURS["chloe"], rr.FACE_COLOURS["classmate"], rr.FACE_COLOURS["unknown"]]
+    assert rr.LEGEND in http.pushes[0]["message"]

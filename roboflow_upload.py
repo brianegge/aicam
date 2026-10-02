@@ -848,7 +848,8 @@ class UploadHandler(BaseHTTPRequestHandler):
                                              share=body.get("share", True),
                                              caption=body.get("caption"),
                                              predicted=body.get("predicted"), label=body.get("label"),
-                                             train=body.get("train", True))
+                                             train=body.get("train", True),
+                                             faces=body.get("faces"))
         self._respond(code, result)
 
     def _respond(self, code, body):

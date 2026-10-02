@@ -193,3 +193,33 @@ def test_one_summary_with_faces_once_the_round_is_answered(tmp_path):
     assert "1 filed under Classmates" in summary["message"]
     assert "Frigate library: Chloe 21, Classmates 13" in summary["message"]
     assert r.summarize_if_done() == 0             # nothing new: no second summary
+
+
+def test_predictions_shown_corrected_and_the_rest_accepted(tmp_path):
+    r, http, _ = make(tmp_path)
+    a = r.add_candidate(jpeg(), [1, 1, 80, 80], source="a", share=False, predicted="yes",
+                        label="Chloe 0.67", train=False)[1]["id"]
+    b = r.add_candidate(jpeg(), [1, 1, 80, 80], source="b", share=False, predicted="no",
+                        label="Classmates 0.44", train=False)[1]["id"]
+    c = r.add_candidate(jpeg(), [1, 1, 80, 80], source="c", share=False, predicted="no",
+                        label="Classmates 0.30", train=False)[1]["id"]
+    assert http.pushes[0]["message"].startswith("Looks like: Chloe 0.67")
+    assert "guess=Chloe%200.67" in http.pushes[0]["url"]
+    r.confirm(c, "yes")                               # a correction
+    code, res = r.accept_rest()
+    assert res["message"] == "Accepted 1 as Chloe and 1 as not"
+    states = {m["id"]: m["state"] for m in r._all()}
+    assert states == {a: "trained", b: "rejected", c: "trained"}
+    assert http.registers == []                       # train=False: no box ever registers
+    assert "1 of those were the predictions" not in http.pushes[-1]["message"]
+    assert "2 of those were the predictions" in http.pushes[-1]["message"]
+
+
+def test_accept_rest_via_confirm_and_not_a_face(tmp_path):
+    r, http, _ = make(tmp_path)
+    a = r.add_candidate(jpeg(), [1, 1, 80, 80], source="a", predicted="no", label="x")[1]["id"]
+    b = r.add_candidate(jpeg(), [1, 1, 80, 80], source="b")[1]["id"]
+    assert r.confirm(b, "notface")[1]["message"] == "Not a face, dropped"
+    assert http.registers == []                       # not filed under Classmates
+    assert r.confirm("__rest__", "accept")[0] == 200
+    assert {m["id"]: m["state"] for m in r._all()}[a] == "rejected"

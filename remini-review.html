@@ -34,22 +34,30 @@
 <p class="sub">The face is boxed in yellow on the photo in the notification.
 "Yes" adds the photo to the next batch sent over iMessage, and teaches Frigate
 her face.</p>
+<p class="sub" id="guess" style="display:none"></p>
 <button class="yes" data-a="yes" id="yes">Yes</button>
 <button class="no" data-a="no">No, someone else</button>
+<button class="no" data-a="notface">Not a face</button>
+<p class="sub" style="margin-top:28px">Done correcting? Everything you have not
+answered takes its "Looks like" guess. Guesses never teach Frigate; only your taps do.</p>
+<button class="no" data-a="accept" data-rest="1">Accept the rest</button>
 <div id="out"></div>
 <script>
  var q = new URLSearchParams(location.search);
  var file = q.get("file") || "", name = q.get("name") || "her";
  document.getElementById("q").textContent = "Is this " + name + "?";
  document.getElementById("yes").textContent = "Yes, it's " + name;
+ var guess = q.get("guess");
+ if (guess) { var g = document.getElementById("guess"); g.textContent = "Looks like: " + guess; g.style.display = "block"; }
  var out = document.getElementById("out");
  function say(t) { out.textContent = t; out.style.display = "block"; }
  function all(d) { var b = document.querySelectorAll("button"); for (var i = 0; i < b.length; i++) b[i].disabled = d; }
- function answer(a) {
-   if (!file) { say("No photo in the link."); return; }
+ function answer(a, rest) {
+   var target = rest ? "__rest__" : file;
+   if (!target) { say("No photo in the link."); return; }
    all(true); say("Sending…");
    fetch(location.origin + "/api/webhook/aicam_roboflow_review?model=remini&file="
-         + encodeURIComponent(file) + "&cam=" + a)
+         + encodeURIComponent(target) + "&cam=" + a)
      .then(function (r) {
        say(r.ok ? "Sent. The confirmation will arrive as a notification."
                 : "Home Assistant answered " + r.status + ".");
@@ -57,7 +65,7 @@ her face.</p>
      })
      .catch(function (e) { say("Could not reach Home Assistant: " + e); all(false); });
  }
- document.addEventListener("click", function (e) { if (e.target.dataset && e.target.dataset.a) answer(e.target.dataset.a); });
+ document.addEventListener("click", function (e) { if (e.target.dataset && e.target.dataset.a) answer(e.target.dataset.a, e.target.dataset.rest); });
 </script>
 </body>
 </html>

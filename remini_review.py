@@ -37,7 +37,10 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-YES, NO = "yes", "no"
+YES, NO, NOT_A_FACE, ACCEPT = "yes", "no", "notface", "accept"
+# The file name an "Accept the rest" tap carries: every pending candidate with
+# a prediction takes it.
+REST = "__rest__"
 BLUEBUBBLES_DB = os.path.expanduser(
     "~/Library/Application Support/bluebubbles-server/config.db")
 
@@ -125,23 +128,28 @@ class ReminiReview(object):
 
     # ------------------------------------------------------------------ candidate
     def add_candidate(self, image_bytes, box, score=None, source=None, date=None, share=True,
-                      caption=None):
+                      caption=None, predicted=None, label=None, train=True):
         """Store a candidate and ask about it. Returns (code, result)."""
         img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             return 400, {"error": "not an image"}
         # The same photo twice (a re-run, a re-post) is one question, not two.
         for meta in self._all():
-            if source and meta.get("source") == source and meta.get("box") == box:
+            if source and meta.get("source") == source and meta["state"] == "pending":
                 return 200, {"id": meta["id"], "status": "duplicate"}
         cid = uuid.uuid4().hex[:12]
         with open(self._path(cid, "jpg"), "wb") as f:
             f.write(image_bytes)
         # share=False: a training question about an old photo. A Yes teaches
         # Frigate but does not send weeks-old pictures out as "today".
-        meta = {"id": cid, "state": "pending", "box": box, "score": score,
+        # predicted/label: the model's own answer, shown so a person only has to
+        # correct the wrong ones; "Accept the rest" applies it to the untouched.
+        # train=False: the box is only a pointer for the eye ("is she anywhere in
+        # this photo?") -- it may well be a classmate, so it must never register.
+        meta = {"id": cid, "state": "pending", "score": score,
                 "source": source, "date": date, "added": self.now(), "share": bool(share),
-                "caption": caption or ""}
+                "caption": caption or "", "predicted": predicted, "label": label}
+        meta["box" if train else "box_shown"] = box
         self._save(cid, meta)
         self._ask(cid, img, meta)
         return 200, {"id": cid, "status": "pending"}
@@ -151,8 +159,8 @@ class ReminiReview(object):
             logger.info("remini review: no Pushover configured, %s waits unasked", cid)
             return
         shown = img.copy()
-        if meta.get("box"):
-            x, y, w, h = meta["box"]
+        if meta.get("box") or meta.get("box_shown"):
+            x, y, w, h = meta.get("box") or meta["box_shown"]
             pad = max(4, int(0.15 * max(w, h)))
             t = max(3, img.shape[1] // 300)
             cv2.rectangle(shown, (x - pad, y - pad), (x + w + pad, y + h + pad), (0, 220, 255), t)
@@ -162,17 +170,20 @@ class ReminiReview(object):
                                interpolation=cv2.INTER_AREA)
         ok, jpg = cv2.imencode(".jpg", shown, [cv2.IMWRITE_JPEG_QUALITY, 85])
         message = "Remini %s" % (meta.get("date") or "photo")
+        if meta.get("label"):
+            message = "Looks like: %s\n%s" % (meta["label"], message)
         if not meta.get("share", True):
             message += " (training only, not shared)"
         if meta.get("score") is not None:
             message += ", Frigate %.0f%%" % (100 * float(meta["score"]))
         token, user = self.cfg.pushover
         page = self.cfg.page_url + ("&" if "?" in self.cfg.page_url else "?") + \
-            urlencode({"file": cid, "name": self.cfg.name}, quote_via=quote)
+            urlencode({k: v for k, v in (("file", cid), ("name", self.cfg.name),
+                                         ("guess", meta.get("label"))) if v}, quote_via=quote)
         r = self.http.post("https://api.pushover.net/1/messages.json", timeout=30, data={
             "token": token, "user": user, "title": "Is this %s?" % self.cfg.name,
             "message": message, "priority": 0, "url": page,
-            "url_title": "Yes / No"},
+            "url_title": "Correct it" if meta.get("label") else "Yes / No"},
             files={"attachment": ("remini.jpg", jpg.tobytes(), "image/jpeg")})
         try:
             ok = r.status_code == 200 and r.json().get("status") == 1
@@ -189,21 +200,27 @@ class ReminiReview(object):
         """Act on a tap. Returns (code, result) like roboflow_upload._do_upload."""
         cid = os.path.basename(cid or "")
         answer = (answer or "").strip().lower()
-        if answer not in (YES, NO):
-            return 400, {"error": "answer must be yes or no"}
+        if cid == REST and answer == ACCEPT:
+            return self.accept_rest()
+        if answer not in (YES, NO, NOT_A_FACE):
+            return 400, {"error": "answer must be yes, no or notface"}
         with self.lock:
             meta = self._load(cid)
             if meta is None:
                 return 404, {"error": "no such photo %s" % cid}
             if meta["state"] != "pending":
                 return 200, {"message": "Already answered: %s" % meta["state"]}
-            if answer == NO:
+            if answer in (NO, NOT_A_FACE):
                 meta["state"] = "rejected"
             else:
                 meta["state"] = "confirmed" if meta.get("share", True) else "trained"
             meta["answered"] = self.now()
             self._save(cid, meta)
-        if answer == NO:
+        if answer == NOT_A_FACE:
+            # A box on a hat or a shoe: nothing to learn, and filing it under
+            # Classmates would teach Frigate a non-face as a person.
+            taught, message = None, "Not a face, dropped"
+        elif answer == NO:
             taught = self.cfg.negative_name if self.cfg.negative_name and self.cfg.train_on_confirm \
                 and self._train(cid, meta, self.cfg.negative_name) else None
             message = "Not %s, %s" % (self.cfg.name, "filed under %s" % taught if taught else "dropped")
@@ -218,6 +235,28 @@ class ReminiReview(object):
             self._save(cid, meta)
         self.summarize_if_done()
         return 200, {"message": message}
+
+    def accept_rest(self):
+        """Apply the model's prediction to every pending candidate that has one.
+
+        Accepted predictions decide which photos are hers; they never train
+        Frigate -- only a person's tap does that."""
+        n = {YES: 0, NO: 0}
+        with self.lock:
+            for m in self._all():
+                if m["state"] != "pending" or m.get("predicted") not in (YES, NO):
+                    continue
+                if m["predicted"] == YES:
+                    m["state"] = "confirmed" if m.get("share", True) else "trained"
+                else:
+                    m["state"] = "rejected"
+                m["answered"] = self.now()
+                m["accepted"] = True
+                m["taught"] = None
+                self._save(m["id"], m)
+                n[m["predicted"]] += 1
+        self.summarize_if_done()
+        return 200, {"message": "Accepted %d as %s and %d as not" % (n[YES], self.cfg.name, n[NO])}
 
     # ------------------------------------------------------------------ summary
     def summarize_if_done(self):
@@ -236,6 +275,7 @@ class ReminiReview(object):
             for m in fresh:
                 m["summarized"] = self.now()
                 self._save(m["id"], m)
+        accepted = sum(1 for m in fresh if m.get("accepted"))
         yes = [m for m in fresh if m["state"] != "rejected"]
         no = [m for m in fresh if m["state"] == "rejected"]
         lines = ["\u2713 %d confirmed as %s" % (len(yes), self.cfg.name)]
@@ -250,6 +290,8 @@ class ReminiReview(object):
         untaught = [m for m in fresh if m.get("box") and not m.get("taught") and self.cfg.train_on_confirm]
         if untaught:
             lines.append("%d could not be added to Frigate (no face found)" % len(untaught))
+        if accepted:
+            lines.append("(%d of those were the predictions, accepted untouched)" % accepted)
         library = self._library_sizes()
         if library:
             lines.append("Frigate library: " + ", ".join("%s %d" % kv for kv in library))
@@ -270,11 +312,18 @@ class ReminiReview(object):
         tiles = []
         for m, colour in [(m, (60, 200, 60)) for m in yes] + [(m, (140, 140, 140)) for m in no]:
             img = cv2.imread(self._path(m["id"], "jpg"))
-            if img is None or not m.get("box"):
+            if img is None:
                 continue
-            x, y, w, h = m["box"]
-            pad = int(0.25 * max(w, h))
-            face = img[max(0, y - pad):y + h + pad, max(0, x - pad):x + w + pad]
+            if m.get("box"):
+                x, y, w, h = m["box"]
+                pad = int(0.25 * max(w, h))
+                face = img[max(0, y - pad):y + h + pad, max(0, x - pad):x + w + pad]
+            else:
+                # A photo-only answer: the box was a pointer that may sit on a
+                # classmate, so show the photo (centre square), not that face.
+                hh, ww = img.shape[:2]
+                side = min(hh, ww)
+                face = img[(hh - side) // 2:(hh + side) // 2, (ww - side) // 2:(ww + side) // 2]
             if face.size == 0:
                 continue
             t = cv2.resize(face, (cell, cell), interpolation=cv2.INTER_AREA)

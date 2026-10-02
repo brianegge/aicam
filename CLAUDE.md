@@ -303,6 +303,15 @@ summary** when the last pending candidate is answered -- after every face is
 in Frigate -- with the counts, the library sizes, and a mosaic of the answered
 faces (Yes framed green, No grey). Answers carry `summarized` once covered.
 
+**Correct-the-mistakes mode.** A candidate may carry `predicted` (yes/no)
+and `label` ("Chloe 0.67"); the Pushover leads with "Looks like: ...", and
+the page's **Accept the rest** (`file=__rest__`, `cam=accept`) applies each
+untouched prediction. Accepted predictions never train Frigate. `train:
+false` stores the box as `box_shown` -- drawn for the eye, never registered
+-- for "is she anywhere in this photo?" questions where the box may be on a
+classmate. **Not a face** (`cam=notface`) drops without filing to
+Classmates.
+
 State is one `<id>.json` + `<id>.jpg` per candidate in `<save-path>/remini/`
 (pending -> confirmed|rejected -> sent; `trained` for share=false). Rejected
 ones are deleted after `keep-rejected-days` (30); confirmed, trained and sent

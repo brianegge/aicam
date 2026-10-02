@@ -301,3 +301,13 @@ def test_labels_lists_answers_with_the_face_picked(tmp_path):
     assert got["a"]["chloe_face"] == 2 and got["a"]["box"] == [200, 10, 40, 40]
     assert got["a"]["faces"] == [[10, 10, 40, 40], [200, 10, 40, 40]]
     assert got["b"]["state"] == "rejected"
+
+
+def test_accepted_face_guess_is_a_reference_for_the_outfit_check(tmp_path):
+    r, http, _ = make(tmp_path)
+    held = r.add_noface(jpeg(), source="back", date="2026-09-24")[1]["id"]
+    r.add_candidate(jpeg(), [100, 50, 40, 40], source="face", date="2026-09-24", predicted="yes",
+                    label="Chloe 0.62", train=False)
+    r.accept_rest()
+    assert r.reference_sheet("2026-09-24") is not None
+    assert r.process_held() == 1 and r._load(held)["state"] == "pending"

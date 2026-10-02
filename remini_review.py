@@ -317,12 +317,17 @@ class ReminiReview(object):
         and around each confirmed face, so the clothes are in it."""
         tiles = []
         for m in self._all():
-            if m.get("date") != date or m["state"] not in ("confirmed", "trained", "sent") or not m.get("box"):
+            # Her face: one picked by number, or the face a guess was about once
+            # the guess was confirmed or accepted (box_shown) -- not a pointer box
+            # on a photo-only question, which may sit on a classmate.
+            face_guess = (m.get("label") or "").startswith("%s 0." % self.cfg.name)
+            box = m.get("box") or (m.get("box_shown") if face_guess else None)
+            if m.get("date") != date or m["state"] not in ("confirmed", "trained", "sent") or not box:
                 continue
             img = cv2.imread(self._path(m["id"], "jpg"))
             if img is None:
                 continue
-            x, y, w, h = m["box"]
+            x, y, w, h = box
             crop = img[max(0, y - h // 2):min(img.shape[0], y + 5 * h), max(0, x - w):min(img.shape[1], x + 2 * w)]
             if crop.size == 0:
                 continue

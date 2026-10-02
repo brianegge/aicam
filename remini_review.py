@@ -21,10 +21,12 @@ copied into config.txt: the server runs on this host and owns that file.
 
 Configured by an optional `[remini-review]` section; without it nothing runs.
 """
+import base64
 import datetime
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -88,6 +90,14 @@ class ReminiReviewConfig(object):
         # to answer "Already answered" to a repeat tap. Confirmed, trained and
         # sent ones stay: they are the photos of her.
         self.rejected_days = s.getint("keep-rejected-days", 30)
+        # Photos with no detectable face go to a vision model (aicam's
+        # [verify] OpenRouter account) with a contact sheet of the day's
+        # confirmed photos of her -- children wear one outfit all day. On the
+        # 2026-09-17 test it was 8/8 on answered photos at ~$0.003 each.
+        v = config["verify"] if config.has_section("verify") else None
+        self.outfit_model = s.get("outfit-model", v.get("model", "google/gemini-3.8-flash") if v else "")
+        self.outfit_key = v.get("api-key") if v is not None and s.getboolean("outfit-check", True) else None
+        self.held_days = s.getint("keep-held-days", 3)
         self.dir = s.get("dir", os.path.join(config["detector"]["save-path"], "remini"))
         self.pushover = (config["pushover"]["token"], config["pushover"]["user"]) \
             if config.has_section("pushover") else None
@@ -285,6 +295,112 @@ class ReminiReview(object):
             self._save(cid, meta)
         self.summarize_if_done()
         return 200, {"message": message}
+
+    # ------------------------------------------------------------------ no-face photos
+    def add_noface(self, image_bytes, source=None, date=None, caption=None, share=True):
+        """A photo with no detectable face: held, not asked about, until the day
+        has a confirmed photo of her to compare outfits against."""
+        if source and any(m.get("source") == source for m in self._all()):
+            return 200, {"status": "duplicate"}
+        if cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR) is None:
+            return 400, {"error": "not an image"}
+        cid = uuid.uuid4().hex[:12]
+        with open(self._path(cid, "jpg"), "wb") as f:
+            f.write(image_bytes)
+        self._save(cid, {"id": cid, "state": "held", "source": source, "date": date,
+                         "caption": caption or "", "share": bool(share), "added": self.now(),
+                         "faces": [], "summarized": self.now()})
+        return 200, {"id": cid, "status": "held"}
+
+    def reference_sheet(self, date, limit=8, height=360):
+        """Her, cropped from the day's confirmed photos: a generous region below
+        and around each confirmed face, so the clothes are in it."""
+        tiles = []
+        for m in self._all():
+            if m.get("date") != date or m["state"] not in ("confirmed", "trained", "sent") or not m.get("box"):
+                continue
+            img = cv2.imread(self._path(m["id"], "jpg"))
+            if img is None:
+                continue
+            x, y, w, h = m["box"]
+            crop = img[max(0, y - h // 2):min(img.shape[0], y + 5 * h), max(0, x - w):min(img.shape[1], x + 2 * w)]
+            if crop.size == 0:
+                continue
+            s = float(height) / crop.shape[0]
+            tiles.append(cv2.copyMakeBorder(cv2.resize(crop, (max(1, int(crop.shape[1] * s)), height)),
+                                            4, 4, 4, 4, cv2.BORDER_CONSTANT, value=(255, 255, 255)))
+            if len(tiles) >= limit:
+                break
+        if not tiles:
+            return None
+        sheet = np.hstack(tiles)
+        if sheet.shape[1] > 2000:
+            sheet = cv2.resize(sheet, (2000, int(sheet.shape[0] * 2000.0 / sheet.shape[1])))
+        return cv2.imencode(".jpg", sheet, [cv2.IMWRITE_JPEG_QUALITY, 88])[1].tobytes()
+
+    OUTFIT_PROMPT = (
+        "Image 1 is a contact sheet of one little girl, photographed several times at preschool today; "
+        "she wears the same clothes all day (she may take a layer off). Image 2 is another photo from the same "
+        "classroom on the same day. Is the girl from image 1 in image 2? Her face may be hidden, turned away, "
+        "blurred or too small, so compare clothing, accessories, hair and build. Other children wear similar "
+        "colours, so only say yes when the details match. Reply only with JSON "
+        '{"present": true|false, "confidence": "high"|"medium"|"low", "where": "<short, or empty>", '
+        '"why": "<one sentence>"}')
+
+    def ask_outfit(self, sheet, photo):
+        """The vision model's verdict on one photo, or None if it could not be had."""
+        b64 = lambda b: "data:image/jpeg;base64," + base64.b64encode(b).decode()
+        try:
+            r = self.http.post("https://openrouter.ai/api/v1/chat/completions", timeout=60,
+                               headers={"Authorization": "Bearer " + self.cfg.outfit_key}, json={
+                "model": self.cfg.outfit_model, "max_tokens": 1000,
+                "response_format": {"type": "json_object"},
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": self.OUTFIT_PROMPT},
+                    {"type": "image_url", "image_url": {"url": b64(sheet)}},
+                    {"type": "image_url", "image_url": {"url": b64(photo)}}]}]})
+            r.raise_for_status()
+            text = (r.json()["choices"][0]["message"].get("content") or "").strip()
+            return json.loads(re.sub(r"^```(?:json)?|```$", "", text, flags=re.M).strip())
+        except Exception:
+            logger.warning("remini review: outfit check failed", exc_info=True)
+            return None
+
+    def process_held(self):
+        """Ask about held no-face photos for every day that now has references.
+        A yes becomes an ordinary candidate guessed "Chloe (outfit)"; a no is
+        dropped quietly. Days without references wait, up to keep-held-days."""
+        held = [m for m in self._all() if m["state"] == "held"]
+        if not held:
+            return 0
+        asked = 0
+        for date in sorted({m.get("date") for m in held}):
+            sheet = self.reference_sheet(date) if self.cfg.outfit_key else None
+            for m in [m for m in held if m.get("date") == date]:
+                if sheet is None:
+                    if self.now() - m.get("added", 0) > self.cfg.held_days * 86400:
+                        m.update(state="rejected", answered=self.now(), why="no references that day")
+                        self._save(m["id"], m)
+                    continue
+                with open(self._path(m["id"], "jpg"), "rb") as f:
+                    verdict = self.ask_outfit(sheet, f.read())
+                if verdict is None:
+                    continue  # try again next pass
+                m["outfit"] = verdict
+                if verdict.get("present"):
+                    m.update(state="pending", predicted="yes", summarized=None,
+                             label="%s (outfit%s)" % (self.cfg.name,
+                                                      ": " + verdict["where"] if verdict.get("where") else ""))
+                    self._save(m["id"], m)
+                    img = cv2.imread(self._path(m["id"], "jpg"))
+                    self._ask(m["id"], img, m)
+                    asked += 1
+                else:
+                    m.update(state="rejected", answered=self.now())
+                    self._save(m["id"], m)
+                logger.info("remini review: outfit check %s %s: %s", m["id"],
+                            "match" if verdict.get("present") else "no match", verdict.get("why", "")[:120])
+        return asked
 
     def accept_rest(self):
         """Apply the model's prediction to every pending candidate that has one.
@@ -508,6 +624,7 @@ class ReminiReview(object):
         last_trim = 0
         while True:
             try:
+                self.process_held()
                 self.send_digest()
                 if self.now() - last_trim > 3600:
                     self.trim()

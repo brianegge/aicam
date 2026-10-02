@@ -29,11 +29,12 @@ class Resp(object):
 class FakeHTTP(object):
     def __init__(self):
         self.pushes, self.registers, self.texts, self.photos = [], [], [], []
+        self.outfit_calls, self.outfit_answer = 0, {"present": True, "where": "left", "why": "same pink pants"}
 
     def get(self, url, timeout=None):
         return Resp(body={"Chloe": ["a"] * 21, "Classmates": ["b"] * 13})
 
-    def post(self, url, data=None, files=None, json=None, params=None, timeout=None):
+    def post(self, url, data=None, files=None, json=None, params=None, timeout=None, headers=None):
         if "pushover" in url:
             self.pushes.append(data)
             return Resp(body={"status": 1})
@@ -43,6 +44,9 @@ class FakeHTTP(object):
         if url.endswith("/message/text"):
             self.texts.append((json["chatGuid"], json["message"]))
             return Resp()
+        if "openrouter" in url:
+            self.outfit_calls += 1
+            return Resp(body={"choices": [{"message": {"content": "```json\n" + __import__("json").dumps(self.outfit_answer) + "\n```"}}]})
         if url.endswith("/message/attachment"):
             self.photos.append(data["chatGuid"])
             return Resp()
@@ -61,6 +65,7 @@ def make(tmp_path, **opts):
     c = ConfigParser()
     c["detector"] = {"save-path": str(tmp_path)}
     c["pushover"] = {"token": "t", "user": "u"}
+    c["verify"] = {"api-key": "k", "model": "m"}
     c["remini-review"] = {"page-url": "https://ha.example/local/remini-review.html",
                           "imessage-chats": "any;-;me@example.com", **opts}
     db = tmp_path / "bb.db"
@@ -250,3 +255,35 @@ def test_numbered_face_answer_trains_exactly_that_face(tmp_path):
     assert http.registers == ["http://192.168.254.31:5000/api/faces/Chloe/register"]
     m = r._load(cid)
     assert m["state"] == "confirmed" and m["box"] == [200, 10, 40, 40] and m["chloe_face"] == 2
+
+
+def test_noface_photo_waits_for_a_reference_then_asks_on_a_match(tmp_path):
+    r, http, clock = make(tmp_path)
+    held = r.add_noface(jpeg(), source="back", date="2026-09-17", caption="note")[1]["id"]
+    assert r.process_held() == 0 and http.outfit_calls == 0      # no reference yet: nothing to compare
+    ref = r.add_candidate(jpeg(), [100, 50, 40, 40], source="face", date="2026-09-17")[1]["id"]
+    r.confirm(ref, "yes")
+    pushes = len(http.pushes)
+    assert r.process_held() == 1 and http.outfit_calls == 1
+    m = r._load(held)
+    assert m["state"] == "pending" and m["predicted"] == "yes" and m["label"] == "Chloe (outfit: left)"
+    assert len(http.pushes) == pushes + 1 and http.pushes[-1]["message"].startswith("Looks like: Chloe (outfit")
+    assert r.add_noface(jpeg(), source="back", date="2026-09-17")[1]["status"] == "duplicate"
+
+
+def test_noface_no_match_is_dropped_quietly(tmp_path):
+    r, http, _ = make(tmp_path)
+    http.outfit_answer = {"present": False, "why": "only a boy"}
+    held = r.add_noface(jpeg(), source="x", date="2026-09-17")[1]["id"]
+    ref = r.add_candidate(jpeg(), [100, 50, 40, 40], source="face", date="2026-09-17")[1]["id"]
+    r.confirm(ref, "yes"); pushes = len(http.pushes)
+    r.process_held()
+    assert r._load(held)["state"] == "rejected" and len(http.pushes) == pushes
+
+
+def test_held_photo_expires_without_references(tmp_path):
+    r, http, clock = make(tmp_path)
+    held = r.add_noface(jpeg(), source="x", date="2026-09-20")[1]["id"]
+    clock.t += 4 * 86400
+    r.process_held()
+    assert r._load(held)["state"] == "rejected" and http.outfit_calls == 0

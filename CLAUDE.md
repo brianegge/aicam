@@ -312,6 +312,18 @@ false` stores the box as `box_shown` -- drawn for the eye, never registered
 classmate. **Not a face** (`cam=notface`) drops without filing to
 Classmates.
 
+**Photos with no detectable face** arrive at `/remini/noface` and are held
+(state `held`, never asked about) until that day has a confirmed photo of her
+with a face box. Then `process_held()` (every minute, in the digest loop)
+builds a contact sheet of her from those confirmed photos -- a generous crop
+around each face, so the clothes are in it -- and asks the `[verify]`
+OpenRouter model (`outfit-model`, default the verify model) whether she is in
+the held photo. A match becomes an ordinary candidate guessed "Chloe (outfit:
+<where>)"; a no is dropped quietly. Held photos give up after
+`keep-held-days` (3). On the 2026-09-17 test it was 8/8 on answered photos,
+~$0.003 a photo, 3-8 s. Only no-face photos and crops of her leave the house.
+`outfit-check = false` turns it off.
+
 State is one `<id>.json` + `<id>.jpg` per candidate in `<save-path>/remini/`
 (pending -> confirmed|rejected -> sent; `trained` for share=false). Rejected
 ones are deleted after `keep-rejected-days` (30); confirmed, trained and sent

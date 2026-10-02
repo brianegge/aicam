@@ -803,6 +803,9 @@ class UploadHandler(BaseHTTPRequestHandler):
         if self.path == "/remini/candidate":
             self._remini_candidate()
             return
+        if self.path == "/remini/noface":
+            self._remini_noface()
+            return
         if self.path != "/upload":
             self._respond(404, {"error": "not found"})
             return
@@ -831,6 +834,20 @@ class UploadHandler(BaseHTTPRequestHandler):
         code, result = _route_tap(filename, model, cam, detection_tags, verdict)
         announce(code, result, filename)
         self._respond(code, result)
+
+    def _remini_noface(self):
+        """From remini-chloe: a photo with no detectable face, held for the outfit check."""
+        if _remini is None:
+            self._respond(404, {"error": "Remini review is not configured here"})
+            return
+        try:
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
+            image = base64.b64decode(body["image"])
+        except (KeyError, ValueError, TypeError) as e:
+            self._respond(400, {"error": "bad photo: %s" % e})
+            return
+        self._respond(*_remini.add_noface(image, body.get("source"), body.get("date"),
+                                          body.get("caption"), share=body.get("share", True)))
 
     def _remini_candidate(self):
         """From remini-chloe on the LAN: {image: base64 jpeg, box, score, source, date}."""

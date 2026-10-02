@@ -247,7 +247,11 @@ forwarded fields are file/model/cam/tags, and `cam` is the only free text
 one). The server classifies through Frigate's
 `/api/faces/train/<name>/classify` -- a new name creates the person -- or
 `/api/faces/train/delete`, and confirms with its own Pushover like any tap.
-`__skip__` and `__delete__` are the reserved names behind Skip / Delete.
+The page's other three answers are reserved names that **delete the face from
+the Train tab without training**: `__cant_tell__` (too blurred to name),
+`__visitor__` (a real person who should not be in the library the cameras
+compare everyone against -- the UPS driver), `__delete__` (not a face).
+`__skip__` still leaves it in the tab, but the page no longer offers it.
 
 **The first run marks everything already in the Train tab as backlog** and
 sends nothing; state is `face-review-seen.json` beside the captures, pruned to

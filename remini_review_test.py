@@ -103,7 +103,7 @@ def test_yes_trains_frigate_and_no_does_not(tmp_path):
     code, res = r.confirm(b, "no")
     assert code == 200 and res["message"] == "Not Chloe, filed under Classmates"
     assert http.registers[1].endswith("/api/faces/Classmates/register")
-    assert r.confirm(a, "yes")[1]["message"].startswith("Already answered")
+    assert r.confirm(a, "yes")[0] == 409
     assert r.confirm(a, "maybe")[0] == 400
     assert r.confirm("missing", "yes")[0] == 404
 
@@ -311,3 +311,16 @@ def test_accepted_face_guess_is_a_reference_for_the_outfit_check(tmp_path):
     r.accept_rest()
     assert r.reference_sheet("2026-09-24") is not None
     assert r.process_held() == 1 and r._load(held)["state"] == "pending"
+
+
+def test_a_tap_corrects_an_accepted_guess_but_not_a_persons_answer(tmp_path):
+    r, http, _ = make(tmp_path)
+    faces = [{"box": [100, 50, 40, 40], "cls": "unknown"}]
+    a = r.add_candidate(jpeg(), [100, 50, 40, 40], source="a", date="2026-09-24", predicted="no",
+                        label="Not Chloe", train=False, faces=faces, share=False)[1]["id"]
+    b = r.add_candidate(jpeg(), [1, 1, 80, 80], source="b", date="2026-09-24", share=False)[1]["id"]
+    r.confirm(b, "no")                       # a person's answer
+    r.accept_rest()                          # a: accepted as not-Chloe
+    code, res = r.confirm(a, "face:1")       # the correction
+    assert code == 200 and r._load(a)["state"] == "trained" and r._load(a)["chloe_face"] == 1
+    assert r.confirm(b, "yes")[0] == 409     # a person's own answer is not overwritten

@@ -254,7 +254,16 @@ class ReminiReview(object):
             if meta is None:
                 return 404, {"error": "no such photo %s" % cid}
             if meta["state"] != "pending":
-                return 200, {"message": "Already answered: %s" % meta["state"]}
+                # A guess applied by "Accept the rest" is the model's answer, not
+                # the person's: a later tap corrects it (2026-10-02, two
+                # corrections were refused this way, silently). A person's own
+                # answer, or a photo already shared, stays as it is -- and says
+                # so with a 409, which announce() does not keep quiet.
+                if not meta.get("accepted") or meta["state"] == "sent":
+                    return 409, {"error": "Already answered: %s" % meta["state"]}
+                meta["accepted"] = False
+                meta["corrected"] = True
+                meta["summarized"] = None
             faces = meta.get("faces") or []
             if face_no is not None and not 1 <= face_no <= len(faces):
                 return 400, {"error": "no face %d in this photo" % face_no}

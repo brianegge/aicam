@@ -429,7 +429,7 @@ class ReminiReview(object):
         person said, and which face was hers. remini-chloe pulls this to train
         its own face model (preschool.py) -- training no longer happens here."""
         cutoff = self.now() - days * 86400
-        keep = ("id", "source", "date", "state", "box", "chloe_face", "predicted", "label",
+        keep = ("id", "source", "date", "state", "box", "box_shown", "chloe_face", "predicted", "label",
                 "accepted", "answered")
         out = []
         for m in self._all():

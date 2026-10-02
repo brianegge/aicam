@@ -31,12 +31,11 @@
 </head>
 <body>
 <h1 id="q">Is this her?</h1>
-<p class="sub">The face is boxed in yellow on the photo in the notification.
-"Yes" adds the photo to the next batch sent over iMessage, and teaches Frigate
-her face.</p>
+<p class="sub">Answer for the whole photo: is she anywhere in it? Other
+children in the photo are fine. The boxes are only the model's guesses.</p>
 <p class="sub" id="guess" style="display:none"></p>
 <button class="yes" data-a="yes" id="yes">Yes</button>
-<button class="no" data-a="no">No, someone else</button>
+<button class="no" data-a="no">No, she's not in it</button>
 <button class="no" data-a="notface">Not a face</button>
 <p class="sub" style="margin-top:28px">Done correcting? Everything you have not
 answered takes its "Looks like" guess. Guesses never teach Frigate; only your taps do.</p>
@@ -46,7 +45,7 @@ answered takes its "Looks like" guess. Guesses never teach Frigate; only your ta
  var q = new URLSearchParams(location.search);
  var file = q.get("file") || "", name = q.get("name") || "her";
  document.getElementById("q").textContent = "Is this " + name + "?";
- document.getElementById("yes").textContent = "Yes, it's " + name;
+ document.getElementById("yes").textContent = "Yes, " + name + " is in this photo";
  var guess = q.get("guess");
  if (guess) { var g = document.getElementById("guess"); g.textContent = "Looks like: " + guess; g.style.display = "block"; }
  var out = document.getElementById("out");

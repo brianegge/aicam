@@ -245,7 +245,9 @@ class ReminiReview(object):
         if no:
             lines.append("\u2717 %d %s" % (len(no), "filed under %s" % self.cfg.negative_name
                                             if any(m.get("taught") for m in no) else "dropped"))
-        untaught = [m for m in fresh if not m.get("taught") and self.cfg.train_on_confirm]
+        # Only faces that were meant to train: a photo-only question (no box --
+        # "is she anywhere in this photo?") never registers anything.
+        untaught = [m for m in fresh if m.get("box") and not m.get("taught") and self.cfg.train_on_confirm]
         if untaught:
             lines.append("%d could not be added to Frigate (no face found)" % len(untaught))
         library = self._library_sizes()

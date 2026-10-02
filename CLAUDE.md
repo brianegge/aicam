@@ -281,7 +281,11 @@ Chloe (or Kyle), so other children need a class of their own to land in. A
 candidate posted with `share: false` is a training question about an old
 photo -- Yes teaches Frigate but never reaches the iMessage batch.
 
-Confirmed photos go out over iMessage as one batch once nothing is pending and
+Confirmed photos go out over iMessage grouped by Remini post, each group
+headed by `digest-text` (default `{name} {date}: {caption}`, e.g. "Chloe
+Sept 15: Hi Families! ...") -- `caption` is the teacher's post text, which
+remini-chloe sends with each candidate (taken from the post's group when only
+one photo of a batch carries it). The batch goes once nothing is pending and
 the last answer is `digest-delay-minutes` (15) old -- through BlueBubbles on
 this Mac, whose password is read from its own `config.db` at send time, not
 copied into config.txt.

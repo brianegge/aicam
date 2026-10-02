@@ -108,7 +108,7 @@ def test_digest_waits_for_pending_and_the_quiet_period(tmp_path):
     assert r.send_digest() == 0                 # b still unanswered
     r.confirm(b, "no")                          # a "no" does not restart the quiet period
     assert r.send_digest() == 1
-    assert http.texts == [("any;-;me@example.com", "Here are some pics of Chloe from school today")]
+    assert http.texts == [("any;-;me@example.com", "Chloe today")]
     assert http.photos == ["any;-;me@example.com"]
     assert r.send_digest() == 0                 # sent is sent
 
@@ -139,3 +139,22 @@ def test_training_only_candidate_teaches_but_is_never_shared(tmp_path):
     assert len(http.registers) == 1
     clock.t += 3600
     assert r.send_digest() == 0 and http.photos == []
+
+
+def test_digest_heads_each_post_with_the_teachers_message(tmp_path):
+    r, http, clock = make(tmp_path)
+    for i, (date, cap) in enumerate([("2026-09-15", "Hi Families!\nApples today."),
+                                     ("2026-09-15", "Hi Families!\nApples today."),
+                                     ("2026-09-16", "")]):
+        cid = r.add_candidate(jpeg(), [1, 1, 80, 80], source=str(i), date=date, caption=cap)[1]["id"]
+        r.confirm(cid, "yes")
+    clock.t += 3600
+    assert r.send_digest() == 3
+    assert [t for _, t in http.texts] == ["Chloe Sept 15: Hi Families!\nApples today.", "Chloe Sept 16"]
+    assert len(http.photos) == 3
+
+
+def test_pretty_date():
+    assert rr.pretty_date("2026-09-15") == "Sept 15"
+    assert rr.pretty_date("2026-03-02") == "March 2"
+    assert rr.pretty_date(None) == "today"

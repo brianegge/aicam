@@ -42,6 +42,19 @@ BLUEBUBBLES_DB = os.path.expanduser(
     "~/Library/Application Support/bluebubbles-server/config.db")
 
 
+# AP-style months, as people write them: "Sept 15", not "Sep 15".
+_MONTHS = ("Jan", "Feb", "March", "April", "May", "June", "July", "Aug", "Sept", "Oct",
+           "Nov", "Dec")
+
+
+def pretty_date(date):
+    try:
+        d = datetime.datetime.strptime(date, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return date or "today"
+    return "%s %d" % (_MONTHS[d.month - 1], d.day)
+
+
 class ReminiReviewConfig(object):
     def __init__(self, config):
         s = config["remini-review"]
@@ -49,8 +62,10 @@ class ReminiReviewConfig(object):
         self.name = s.get("name", "Chloe")
         self.chats = [c.strip() for c in s.get("imessage-chats", "").split(",") if c.strip()]
         self.digest_delay = s.getint("digest-delay-minutes", 15) * 60
-        self.digest_text = s.get("digest-text", "Here are some pics of %s from school today"
-                                 % self.name)
+        # One message per Remini post, ahead of its photos. {caption} is the
+        # teacher's own text from that post; without one the header is just
+        # "{name} {date}".
+        self.digest_text = s.get("digest-text", "{name} {date}: {caption}")
         self.train_on_confirm = s.getboolean("train-on-confirm", True)
         # "No" files the face here, so Frigate learns what not-her looks like. With
         # only adults beside her in the library, every unknown preschooler's
@@ -105,7 +120,8 @@ class ReminiReview(object):
         return out
 
     # ------------------------------------------------------------------ candidate
-    def add_candidate(self, image_bytes, box, score=None, source=None, date=None, share=True):
+    def add_candidate(self, image_bytes, box, score=None, source=None, date=None, share=True,
+                      caption=None):
         """Store a candidate and ask about it. Returns (code, result)."""
         img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
@@ -120,7 +136,8 @@ class ReminiReview(object):
         # share=False: a training question about an old photo. A Yes teaches
         # Frigate but does not send weeks-old pictures out as "today".
         meta = {"id": cid, "state": "pending", "box": box, "score": score,
-                "source": source, "date": date, "added": self.now(), "share": bool(share)}
+                "source": source, "date": date, "added": self.now(), "share": bool(share),
+                "caption": caption or ""}
         self._save(cid, meta)
         self._ask(cid, img, meta)
         return 200, {"id": cid, "status": "pending"}
@@ -232,16 +249,27 @@ class ReminiReview(object):
             if not ready or not self.cfg.chats:
                 return 0
             password = self._bluebubbles_password()
+            # Grouped by post, in date order: each group is the teacher's
+            # message for that day, then the photos of Chloe from it.
+            groups = {}
+            for m in sorted(ready, key=lambda m: (m.get("date") or "", m.get("added", 0))):
+                groups.setdefault((m.get("date") or "", m.get("caption") or ""), []).append(m)
             for chat in self.cfg.chats:
-                self._bb_text(chat, password, self.cfg.digest_text)
-                for m in ready:
-                    self._bb_photo(chat, password, self._path(m["id"], "jpg"))
+                for (date, caption), items in groups.items():
+                    self._bb_text(chat, password, self.header(date, caption))
+                    for m in items:
+                        self._bb_photo(chat, password, self._path(m["id"], "jpg"))
             for m in ready:
                 m["state"] = "sent"
                 m["sent"] = self.now()
                 self._save(m["id"], m)
             logger.info("remini review: sent %d photo(s) to %s", len(ready), ", ".join(self.cfg.chats))
             return len(ready)
+
+    def header(self, date, caption):
+        text = self.cfg.digest_text.format(name=self.cfg.name, date=pretty_date(date),
+                                           caption=caption or "").strip()
+        return text.rstrip(":").strip() if not caption else text
 
     def _bluebubbles_password(self):
         db = sqlite3.connect("file:%s?mode=ro" % self.cfg.bluebubbles_db, uri=True)

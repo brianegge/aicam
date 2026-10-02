@@ -204,15 +204,103 @@ class ReminiReview(object):
             meta["answered"] = self.now()
             self._save(cid, meta)
         if answer == NO:
-            if self.cfg.negative_name and self.cfg.train_on_confirm and \
-                    self._train(cid, meta, self.cfg.negative_name):
-                return 200, {"message": "Not %s, filed under %s" % (self.cfg.name, self.cfg.negative_name)}
-            return 200, {"message": "Not %s, dropped" % self.cfg.name}
-        trained = self._train(cid, meta) if self.cfg.train_on_confirm else False
-        taught = ", and taught to Frigate" if trained else ""
-        if not meta.get("share", True):
-            return 200, {"message": "%s confirmed%s (not shared)" % (self.cfg.name, taught)}
-        return 200, {"message": "%s confirmed, in the next batch%s" % (self.cfg.name, taught)}
+            taught = self.cfg.negative_name if self.cfg.negative_name and self.cfg.train_on_confirm \
+                and self._train(cid, meta, self.cfg.negative_name) else None
+            message = "Not %s, %s" % (self.cfg.name, "filed under %s" % taught if taught else "dropped")
+        else:
+            taught = self.cfg.name if self.cfg.train_on_confirm and self._train(cid, meta) else None
+            message = "%s confirmed%s%s" % (
+                self.cfg.name, ", and taught to Frigate" if taught else "",
+                " (not shared)" if not meta.get("share", True) else ", in the next batch")
+        with self.lock:
+            meta = self._load(cid) or meta
+            meta["taught"] = taught
+            self._save(cid, meta)
+        self.summarize_if_done()
+        return 200, {"message": message}
+
+    # ------------------------------------------------------------------ summary
+    def summarize_if_done(self):
+        """One Pushover for a whole round of answers, once the last pending one is
+        answered -- by then every face is already in Frigate's library. Per-tap
+        confirmations were a wall of near-identical lines (2026-10-02): the
+        summary says what changed, with the faces themselves as the picture.
+        Returns how many answers it covered."""
+        with self.lock:
+            items = self._all()
+            if any(m["state"] == "pending" for m in items):
+                return 0
+            fresh = [m for m in items if m.get("answered") and not m.get("summarized")]
+            if not fresh:
+                return 0
+            for m in fresh:
+                m["summarized"] = self.now()
+                self._save(m["id"], m)
+        yes = [m for m in fresh if m["state"] != "rejected"]
+        no = [m for m in fresh if m["state"] == "rejected"]
+        lines = ["\u2713 %d confirmed as %s" % (len(yes), self.cfg.name)]
+        shared = sum(1 for m in yes if m["state"] in ("confirmed", "sent"))
+        if shared:
+            lines[0] += ", %d queued for iMessage" % shared
+        if no:
+            lines.append("\u2717 %d %s" % (len(no), "filed under %s" % self.cfg.negative_name
+                                            if any(m.get("taught") for m in no) else "dropped"))
+        untaught = [m for m in fresh if not m.get("taught") and self.cfg.train_on_confirm]
+        if untaught:
+            lines.append("%d could not be added to Frigate (no face found)" % len(untaught))
+        library = self._library_sizes()
+        if library:
+            lines.append("Frigate library: " + ", ".join("%s %d" % kv for kv in library))
+        self._push("Remini review done", "\n".join(lines), self._mosaic(yes, no))
+        logger.info("remini review: summary sent for %d answer(s)", len(fresh))
+        return len(fresh)
+
+    def _library_sizes(self):
+        try:
+            faces = self.http.get(self.cfg.frigate_url + "/api/faces", timeout=15).json()
+        except Exception:
+            return []
+        names = [self.cfg.name] + ([self.cfg.negative_name] if self.cfg.negative_name else [])
+        return [(n, len(faces.get(n) or [])) for n in names]
+
+    def _mosaic(self, yes, no, cell=160, cols=6, limit=36):
+        """The answered faces, cropped, Yes framed green and No framed grey."""
+        tiles = []
+        for m, colour in [(m, (60, 200, 60)) for m in yes] + [(m, (140, 140, 140)) for m in no]:
+            img = cv2.imread(self._path(m["id"], "jpg"))
+            if img is None or not m.get("box"):
+                continue
+            x, y, w, h = m["box"]
+            pad = int(0.25 * max(w, h))
+            face = img[max(0, y - pad):y + h + pad, max(0, x - pad):x + w + pad]
+            if face.size == 0:
+                continue
+            t = cv2.resize(face, (cell, cell), interpolation=cv2.INTER_AREA)
+            cv2.rectangle(t, (0, 0), (cell - 1, cell - 1), colour, 6)
+            tiles.append(t)
+            if len(tiles) >= limit:
+                break
+        if not tiles:
+            return None
+        tiles += [np.zeros((cell, cell, 3), np.uint8)] * (-len(tiles) % cols)
+        rows = [np.hstack(tiles[i:i + cols]) for i in range(0, len(tiles), cols)]
+        ok, jpg = cv2.imencode(".jpg", np.vstack(rows), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return jpg.tobytes() if ok else None
+
+    def _push(self, title, message, image=None):
+        if not self.cfg.pushover:
+            return
+        token, user = self.cfg.pushover
+        files = {"attachment": ("faces.jpg", image, "image/jpeg")} if image else None
+        try:
+            r = self.http.post("https://api.pushover.net/1/messages.json", timeout=30, files=files,
+                               data={"token": token, "user": user, "title": title,
+                                     "message": message, "priority": 0})
+            if r.status_code != 200:
+                logger.warning("remini review: Pushover refused the summary: %s %s",
+                               r.status_code, r.text.strip()[:300])
+        except Exception:
+            logger.warning("remini review: could not send the summary", exc_info=True)
 
     def _train(self, cid, meta, name=None):
         """Register the face with Frigate under `name` (default the child). A padded crop, so Frigate's own

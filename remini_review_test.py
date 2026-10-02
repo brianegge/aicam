@@ -30,6 +30,9 @@ class FakeHTTP(object):
     def __init__(self):
         self.pushes, self.registers, self.texts, self.photos = [], [], [], []
 
+    def get(self, url, timeout=None):
+        return Resp(body={"Chloe": ["a"] * 21, "Classmates": ["b"] * 13})
+
     def post(self, url, data=None, files=None, json=None, params=None, timeout=None):
         if "pushover" in url:
             self.pushes.append(data)
@@ -172,3 +175,21 @@ def test_trim_removes_only_old_rejections(tmp_path):
     assert r.trim() == 1
     left = sorted(os.listdir(r.cfg.dir))
     assert left == sorted([yes + ".jpg", yes + ".json"])
+
+
+def test_one_summary_with_faces_once_the_round_is_answered(tmp_path):
+    r, http, _ = make(tmp_path)
+    ids = [r.add_candidate(jpeg(), [100, 100, 80, 80], source=str(i), share=False)[1]["id"]
+           for i in range(3)]
+    asked = len(http.pushes)
+    r.confirm(ids[0], "yes")
+    r.confirm(ids[1], "no")
+    assert len(http.pushes) == asked              # one still pending: no summary yet
+    r.confirm(ids[2], "yes")
+    summary = http.pushes[-1]
+    assert len(http.pushes) == asked + 1
+    assert summary["title"] == "Remini review done"
+    assert "2 confirmed as Chloe" in summary["message"]
+    assert "1 filed under Classmates" in summary["message"]
+    assert "Frigate library: Chloe 21, Classmates 13" in summary["message"]
+    assert r.summarize_if_done() == 0             # nothing new: no second summary

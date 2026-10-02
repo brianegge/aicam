@@ -454,3 +454,11 @@ def test_face_tap_without_face_review_configured(monkeypatch):
     monkeypatch.setattr(roboflow_upload, "_face_review", None)
     code, result = roboflow_upload._do_face("x.webp", "Chloe")
     assert code == 404 and result["face"] is True
+
+
+def test_successful_face_and_remini_taps_do_not_notify(monkeypatch):
+    sent = []
+    monkeypatch.setattr(roboflow_upload, "urlopen", lambda *a, **k: sent.append(a) or None)
+    roboflow_upload.announce(200, {"remini": True, "message": "Chloe confirmed"}, "x")
+    roboflow_upload.announce(200, {"face": True, "message": "Added to Lee"}, "x")
+    assert sent == []

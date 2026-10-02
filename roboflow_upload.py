@@ -650,6 +650,13 @@ def announce(code, result, filename):
     nothing and a rejected one wrote nothing either. Every tap in the log had
     reached Pushover and been accepted, which the log could have said.
     """
+    if code == 200 and (result.get("face") or result.get("remini")):
+        # Face and Remini taps come in runs of a dozen; a line each was a wall
+        # of near-identical notifications (2026-10-02). Remini sends one summary
+        # when the round is done (remini_review.summarize_if_done); a failure
+        # still announces itself below.
+        logger.info("tap on %s: %s", os.path.basename(filename or "?"), tap_message(code, result, filename))
+        return
     if not _config or not _config.pushover:
         logger.info("tap on %s: no Pushover configured, not confirming",
                     os.path.basename(filename or "?"))

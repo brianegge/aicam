@@ -297,6 +297,12 @@ imessage-chats = any;-;brianegge@gmail.com      # comma-separated chat guids
 # name = Chloe / digest-delay-minutes = 15 / train-on-confirm = true
 ```
 
+**No per-tap confirmation** for Remini or face taps (a dozen identical lines
+per round, 2026-10-02); failures still announce. Remini instead sends **one
+summary** when the last pending candidate is answered -- after every face is
+in Frigate -- with the counts, the library sizes, and a mosaic of the answered
+faces (Yes framed green, No grey). Answers carry `summarized` once covered.
+
 State is one `<id>.json` + `<id>.jpg` per candidate in `<save-path>/remini/`
 (pending -> confirmed|rejected -> sent; `trained` for share=false). Rejected
 ones are deleted after `keep-rejected-days` (30); confirmed, trained and sent

@@ -424,6 +424,21 @@ class ReminiReview(object):
         self.summarize_if_done()
         return 200, {"message": "Accepted %d as %s and %d as not" % (n[YES], self.cfg.name, n[NO])}
 
+    def labels(self, days=30):
+        """Every answered candidate of the last `days`, without images: what the
+        person said, and which face was hers. remini-chloe pulls this to train
+        its own face model (preschool.py) -- training no longer happens here."""
+        cutoff = self.now() - days * 86400
+        keep = ("id", "source", "date", "state", "box", "chloe_face", "predicted", "label",
+                "accepted", "answered")
+        out = []
+        for m in self._all():
+            if m.get("answered") and m["answered"] >= cutoff and m["state"] not in ("pending", "held"):
+                row = {k: m.get(k) for k in keep}
+                row["faces"] = [f["box"] for f in m.get("faces") or []]
+                out.append(row)
+        return out
+
     # ------------------------------------------------------------------ summary
     def summarize_if_done(self):
         """One Pushover for a whole round of answers, once the last pending one is

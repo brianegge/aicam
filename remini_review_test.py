@@ -287,3 +287,17 @@ def test_held_photo_expires_without_references(tmp_path):
     clock.t += 4 * 86400
     r.process_held()
     assert r._load(held)["state"] == "rejected" and http.outfit_calls == 0
+
+
+def test_labels_lists_answers_with_the_face_picked(tmp_path):
+    r, http, _ = make(tmp_path)
+    faces = [{"box": [10, 10, 40, 40], "cls": "unknown"}, {"box": [200, 10, 40, 40], "cls": "chloe"}]
+    a = r.add_candidate(jpeg(), [200, 10, 40, 40], source="a", date="2026-09-17", train=False, faces=faces)[1]["id"]
+    b = r.add_candidate(jpeg(), [1, 1, 80, 80], source="b", date="2026-09-17")[1]["id"]
+    r.add_candidate(jpeg(), [1, 1, 80, 80], source="c", date="2026-09-17")      # still pending: not listed
+    r.confirm(a, "face:2"); r.confirm(b, "no")
+    got = {l["source"]: l for l in r.labels()}
+    assert set(got) == {"a", "b"}
+    assert got["a"]["chloe_face"] == 2 and got["a"]["box"] == [200, 10, 40, 40]
+    assert got["a"]["faces"] == [[10, 10, 40, 40], [200, 10, 40, 40]]
+    assert got["b"]["state"] == "rejected"

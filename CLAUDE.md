@@ -312,6 +312,14 @@ false` stores the box as `box_shown` -- drawn for the eye, never registered
 classmate. **Not a face** (`cam=notface`) drops without filing to
 Classmates.
 
+**Training moved out of Frigate (2026-10-02).** remini-chloe on ubuntu24 now
+has its own face model (`preschool.py` there: nearest-example ArcFace, Chloe
+vs every face from days she was absent) and pulls answers from
+`GET /remini/labels` to train it. claw-mini runs with `train-on-confirm =
+false` and an empty `negative-name`, so taps no longer register anything with
+Frigate, and Frigate's Classmates class was deleted. Frigate keeps Chloe's
+library for the home cameras.
+
 **Photos with no detectable face** arrive at `/remini/noface` and are held
 (state `held`, never asked about) until that day has a confirmed photo of her
 with a face box. Then `process_held()` (every minute, in the digest loop)

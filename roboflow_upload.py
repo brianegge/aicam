@@ -713,6 +713,14 @@ class UploadHandler(BaseHTTPRequestHandler):
         if parsed.path == "/health":
             self._respond(200, {"status": "ok"})
             return
+        if parsed.path == "/remini/labels":
+            # Read-only, LAN-side: remini-chloe on ubuntu24 trains its face model
+            # from these answers.
+            if _remini is None:
+                self._respond(404, {"error": "Remini review is not configured here"})
+            else:
+                self._respond(200, {"labels": _remini.labels()})
+            return
 
         params = parse_qs(parsed.query)
         filename = params.get("file", [None])[0]

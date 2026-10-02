@@ -441,3 +441,16 @@ class TestRoadLabels:
         loaded = excludes.load_dir(roboflow_upload._config.auto_dir,
                                    ["ipcams_v32.onnx", "packages_v11.onnx"])
         assert list(loaded["peach tree"]) == ["*"]
+
+
+def test_face_tap_confirmation_reads_the_face_result():
+    assert roboflow_upload.tap_message(200, {"face": True, "message": "Added to Chloe"}, "x.webp") \
+        == "Face: Added to Chloe"
+    assert roboflow_upload.tap_message(502, {"face": True, "error": "Frigate unreachable"}, "x.webp") \
+        == "Face: Frigate unreachable"
+
+
+def test_face_tap_without_face_review_configured(monkeypatch):
+    monkeypatch.setattr(roboflow_upload, "_face_review", None)
+    code, result = roboflow_upload._do_face("x.webp", "Chloe")
+    assert code == 404 and result["face"] is True

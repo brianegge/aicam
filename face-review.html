@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<!--
+  Name a face from Frigate's Train tab -- the phone-sized stand-in for that
+  tab, which goes white on the iPhone.
+
+  Lives beside review.html in Home Assistant's /config/www and is served at
+  /local/face-review.html, for the same reason: it is the only static hosting
+  reachable from outside. face_review.py links here with
+    ?file=<train file name>&names=<comma-separated library names>
+  The names travel in the link because this page cannot reach Frigate.
+
+  A button calls the existing aicam_roboflow_review webhook with model=face,
+  file=<train file>, cam=<name>. Home Assistant forwards those to the review
+  server on claw-mini, which classifies the face through Frigate's API and
+  sends a Pushover saying what it did -- the webhook itself answers with an
+  empty body (see review.html).
+
+  Like review.html it shows no picture: the notification already had one, and
+  the image lives on a host this page cannot reach.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Who is this?</title>
+<style>
+ :root { color-scheme: dark; }
+ body{font-family:-apple-system,system-ui,sans-serif;max-width:520px;
+      margin:0 auto;padding:24px 16px 40px;background:#111;color:#eee}
+ h1{font-size:20px;font-weight:600;margin:0 0 4px}
+ .sub{color:#999;font-size:13px;margin:0 0 20px;word-break:break-all}
+ .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+ button{width:100%;padding:16px 8px;font-size:17px;font-weight:600;border:0;
+        border-radius:12px;color:#fff;background:#2563eb;
+        -webkit-tap-highlight-color:transparent}
+ button.other{background:#4b5563}
+ button.del{background:#dc2626}
+ button:disabled{opacity:.4}
+ .row{display:flex;gap:10px;margin-top:14px}
+ input{flex:1;min-width:0;padding:14px;font-size:17px;border-radius:12px;
+       border:1px solid #333;background:#1c1c1e;color:#eee}
+ .row button{width:auto;padding:14px 18px}
+ #out{margin-top:20px;padding:14px;border-radius:10px;background:#1c1c1e;
+      font-size:15px;color:#ddd;display:none}
+</style>
+</head>
+<body>
+<h1>Who is this?</h1>
+<p class="sub" id="which"></p>
+
+<div class="grid" id="names"></div>
+
+<div class="row">
+ <input id="newname" placeholder="Someone new…" autocapitalize="words" autocomplete="off">
+ <button id="add">Add</button>
+</div>
+
+<div class="grid" style="margin-top:14px">
+ <button class="other" data-name="__skip__">Skip</button>
+ <button class="del" data-name="__delete__">Not a face / delete</button>
+</div>
+
+<div id="out"></div>
+
+<script>
+ var q = new URLSearchParams(location.search);
+ var file = q.get("file") || "";
+ var names = (q.get("names") || "").split(",").filter(Boolean);
+ document.getElementById("which").textContent = file || "no face given";
+
+ var grid = document.getElementById("names");
+ names.forEach(function (n) {
+   var b = document.createElement("button");
+   b.textContent = n; b.dataset.name = n; grid.appendChild(b);
+ });
+
+ var out = document.getElementById("out");
+ function say(text) { out.textContent = text; out.style.display = "block"; }
+ function all(disabled) {
+   var bs = document.querySelectorAll("button");
+   for (var i = 0; i < bs.length; i++) bs[i].disabled = disabled;
+ }
+
+ function pick(name) {
+   if (!file) { say("No face in the link, so there is nothing to name."); return; }
+   name = (name || "").trim();
+   if (!name) return;
+   all(true);
+   say("Sending…");
+   fetch(location.origin + "/api/webhook/aicam_roboflow_review?model=face"
+         + "&file=" + encodeURIComponent(file) + "&cam=" + encodeURIComponent(name))
+     .then(function (r) {
+       say(r.ok ? "Sent. The confirmation will arrive as a notification."
+                : "Home Assistant answered " + r.status + ".");
+       if (!r.ok) all(false);
+     })
+     .catch(function (e) { say("Could not reach Home Assistant: " + e); all(false); });
+ }
+
+ document.addEventListener("click", function (e) {
+   if (e.target.id === "add") pick(document.getElementById("newname").value);
+   else if (e.target.dataset && e.target.dataset.name) pick(e.target.dataset.name);
+ });
+ document.getElementById("newname").addEventListener("keydown", function (e) {
+   if (e.key === "Enter") pick(this.value);
+ });
+</script>
+</body>
+</html>

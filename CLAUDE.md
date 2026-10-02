@@ -223,6 +223,40 @@ page. Copy it to Home Assistant's `/config/www/review.html` and set
 instead of three links. Worth it mainly because opening the page asserts
 nothing, where every inline link is a bare GET.
 
+## Face review (Frigate Train tab over Pushover)
+
+`face_review.py` runs inside the review server (`roboflow_upload.py`) when
+config.txt has a `[face-review]` section. It polls Frigate's `/api/faces`
+every minute and sends one Pushover per new sighting in the Train tab -- the
+largest attempt of each Frigate event, scaled up so the lock screen shows a
+face -- linking to `face-review.html` on Home Assistant. Built 2026-10-01
+because the Train tab goes white on the iPhone.
+
+```
+[face-review]
+page-url = https://<nabu-casa>/local/face-review.html
+# frigate-url = http://192.168.254.31:5000   (default)
+# min-side = 70        smaller crops cannot be recognised, so are not sent
+# max-per-poll = 5     a burst waits for the next poll instead of flooding
+# priority = 0 / sound = none
+```
+
+A tap goes through the **existing** `aicam_roboflow_review` webhook, no new
+Home Assistant YAML: `model=face`, `file=<train file>`, `cam=<name>` (the four
+forwarded fields are file/model/cam/tags, and `cam` is the only free text
+one). The server classifies through Frigate's
+`/api/faces/train/<name>/classify` -- a new name creates the person -- or
+`/api/faces/train/delete`, and confirms with its own Pushover like any tap.
+`__skip__` and `__delete__` are the reserved names behind Skip / Delete.
+
+**The first run marks everything already in the Train tab as backlog** and
+sends nothing; state is `face-review-seen.json` beside the captures, pruned to
+the events still in the tab. Delete it to re-baseline. claw-mini reaches
+Frigate's port 5000 directly (checked 2026-10-01).
+
+Install the page like review.html: copy `face-review.html` to Home Assistant's
+`/config/www/`.
+
 ## Logs
 ```bash
 # View aicam logs

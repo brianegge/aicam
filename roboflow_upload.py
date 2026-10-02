@@ -29,6 +29,7 @@ except ImportError:
     from urlparse import urlparse, parse_qs
     from urllib import urlencode
 
+import face_review
 from excludes import slug as _slug
 from utils import bb_intersection_over_union
 
@@ -198,6 +199,8 @@ def annotate_null(api_key, project_id, image_id, name, width, height):
 
 
 _config = None
+# Frigate face review (face_review.py); None unless [face-review] is configured.
+_face_review = None
 
 # What a tap on the phone can say about a frame.
 #   flag    -- upload it unannotated, label it by hand later (the original)
@@ -572,6 +575,10 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
 
 def tap_message(code, result, filename):
     """One line saying what the tap did. Short: it lands on a lock screen."""
+    if result.get("face"):
+        if code != 200:
+            return "Face: %s" % result.get("error", "failed")
+        return "Face: %s" % result.get("message", "done")
     if code != 200:
         return "%s: %s" % (os.path.basename(filename or "?"),
                            result.get("error", "upload failed"))
@@ -600,6 +607,16 @@ def tap_message(code, result, filename):
         return "Marked false, %s in %s; %s" % ("background example", where,
                                                "; ".join(parts))
     return "Flagged for review, uploaded to %s" % where
+
+
+def _do_face(filename, name):
+    """A tap from face-review.html: model=face, cam=<the name chosen>."""
+    if _face_review is None:
+        code, result = 404, {"error": "face review is not configured here"}
+    else:
+        code, result = _face_review.classify(filename, name)
+    result["face"] = True
+    return code, result
 
 
 def announce(code, result, filename):
@@ -685,6 +702,12 @@ class UploadHandler(BaseHTTPRequestHandler):
         tags_str = params.get("tags", [""])[0]
         detection_tags = set(tags_str.split(",")) if tags_str else set()
         verdict = params.get("v", [None])[0]
+
+        if model == "face":
+            code, result = _do_face(filename, cam)
+            announce(code, result, filename)
+            self._respond(code, result)
+            return
 
         code, result = _do_upload(filename, model, cam, detection_tags, verdict)
         announce(code, result, filename)
@@ -773,7 +796,10 @@ class UploadHandler(BaseHTTPRequestHandler):
             self._respond(400, {"error": "missing 'file' field"})
             return
 
-        code, result = _do_upload(filename, model, cam, detection_tags, verdict)
+        if model == "face":
+            code, result = _do_face(filename, cam)
+        else:
+            code, result = _do_upload(filename, model, cam, detection_tags, verdict)
         announce(code, result, filename)
         self._respond(code, result)
 
@@ -810,8 +836,10 @@ def main():
         logger.error("Missing [detector] section in %s", args.config)
         sys.exit(1)
 
+    global _face_review
     _config = Config(config)
     _config.config_path = args.config
+    _face_review = face_review.start(config)
     os.makedirs(_config.review_dir, exist_ok=True)
 
     server = HTTPServer(("", args.port), UploadHandler)

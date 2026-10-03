@@ -106,6 +106,26 @@ After that the rock reads `none` at 1.00 on all 20 frames, the held-out
 tree-line object reads `none` with no animal label at all, and 16 crops of a
 covered grill that the old model called `dog` read `none`.
 
+## Retraining the packages/vehicles model on a new Roboflow version
+
+`packages-vehicles2` v13, trained 2026-10-03 (~1 h 50 min). It's the deployed
+yolo11s 608-square recipe on more data, so the comparison isolates the data.
+
+1. **Generate the version** with v11's settings: Stretch to 608x608, no
+   augmentation. Roboflow keeps existing images in their split, so v13's test
+   holds all 61 of v11's test images plus 4 new ones.
+
+2. **Remap to two classes** -- `build_pv13.py`. v13 is the first version with
+   a `person` class (5 boxes), which moves `vehicle` to index 2 and would
+   break `vehicle-labels.txt`.
+
+3. **Train, export, score** -- `run_pv13.sh`, then `after_pv13.sh`.
+
+4. **Replay the capture archive** -- `replay_vehicle.py OLD NEW > replay.csv`.
+   The test split holds no IR glare and no parked cars on peach tree; the
+   archive has both. Read the frames where only one model fires before
+   believing a count.
+
 ## The split does not see everything
 
 `compare_models.py` scores a held-out split, and the split is drawn from the

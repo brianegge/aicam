@@ -120,6 +120,37 @@ def test_a_retrain_puts_a_provisional_exclusion_back_on_trial(tmp_path):
     assert excludes.load_dir(str(tmp_path), ["ipcams_v33.onnx", "packages_v11.onnx"]) == {}
 
 
+LABELS = {"ipcams_v32.onnx": {"rabbit", "dog", "person"},
+          "packages_v13.onnx": {"package", "vehicle"}}
+
+
+def test_retraining_the_vehicle_model_leaves_animal_exclusions_alone(tmp_path):
+    """2026-10-03: a vehicle-model swap re-armed 55 animal/person exclusions."""
+    write(tmp_path, "peach_tree-rabbit-11-22.yaml", PROVISIONAL)
+    got = excludes.load_dir(str(tmp_path), ["ipcams_v32.onnx", "packages_v13.onnx"], LABELS)
+    assert got["peach tree"]["rabbit"]
+
+
+def test_retraining_the_model_that_saw_it_still_rearms_it(tmp_path):
+    write(tmp_path, "peach_tree-rabbit-11-22.yaml", PROVISIONAL)
+    labels = {"ipcams_v33.onnx": LABELS["ipcams_v32.onnx"],
+              "packages_v11.onnx": LABELS["packages_v13.onnx"]}
+    assert excludes.load_dir(str(tmp_path), ["ipcams_v33.onnx", "packages_v11.onnx"], labels) == {}
+
+
+def test_a_package_exclusion_rearms_when_the_vehicle_model_changes(tmp_path):
+    write(tmp_path, "garage-package-11-22.yaml", PROVISIONAL.replace(
+        "label: rabbit", "label: \"*\"\n    seen_as: package"))
+    assert excludes.load_dir(str(tmp_path), ["ipcams_v32.onnx", "packages_v13.onnx"], LABELS) == {}
+
+
+def test_road_variants_belong_to_the_model_that_saw_the_base_class(tmp_path):
+    write(tmp_path, "peach_tree-dog_road-11-22.yaml", PROVISIONAL.replace(
+        "label: rabbit", "label: \"*\"\n    seen_as: dog_road"))
+    got = excludes.load_dir(str(tmp_path), ["ipcams_v32.onnx", "packages_v13.onnx"], LABELS)
+    assert got["peach tree"]["*"]
+
+
 def test_a_hand_written_exclusion_is_not_touched_by_a_retrain(tmp_path):
     """Only provisional ones expire; excludes/ is audited geometry."""
     write(tmp_path, "peach_tree-deer-23-90.yaml", """

@@ -53,6 +53,16 @@ def model_files(config):
     return sorted(found)
 
 
+def model_labels(config, labels, vehicle_labels):
+    """{model basename: set of class names it produces}, for excludes._stale."""
+    found = {}
+    for section, names in (("color-model", labels), ("grey-model", labels),
+                           ("vehicle-model", vehicle_labels)):
+        if config.has_section(section) and config.has_option(section, "onnx"):
+            found.setdefault(os.path.basename(config[section]["onnx"]), set()).update(names)
+    return found
+
+
 def get_version() -> str:
     try:
         return subprocess.check_output(
@@ -434,12 +444,14 @@ async def main(options: argparse.Namespace) -> None:
     # trial. The auto dir is outside the checkout on purpose -- a deploy's
     # `git stash -u` once swept every untracked file in it.
     models = model_files(config)
+    labels_by_model = model_labels(config, labels, vehicle_labels)
     excludes_file = detector_config.get("excludes-file")
     excludes_dir = detector_config.get("excludes-dir", "excludes")
     excludes_auto_dir = detector_config.get(
         "excludes-auto-dir",
         os.path.join(detector_config["save-path"], "excludes-auto"))
-    excludes = load_excludes(excludes_file, excludes_dir, excludes_auto_dir, models)
+    excludes = load_excludes(excludes_file, excludes_dir, excludes_auto_dir, models,
+                             labels_by_model)
     excludes_sig = exclude_signature(excludes_dir, excludes_auto_dir)
     excludes_checked = 0.0
     # make dirs
@@ -521,7 +533,7 @@ async def main(options: argparse.Namespace) -> None:
             if current != excludes_sig:
                 excludes_sig = current
                 excludes = load_excludes(excludes_file, excludes_dir,
-                                         excludes_auto_dir, models)
+                                         excludes_auto_dir, models, labels_by_model)
                 for cam in cams:
                     cam.excludes = excludes.get(cam.name, {})
                 log.info("reloaded exclusions: %d now in force",

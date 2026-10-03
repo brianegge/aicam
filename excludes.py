@@ -47,7 +47,24 @@ def _as_box(d):
     return {k: float(d[k]) for k in ("left", "top", "width", "height")}
 
 
-def load_dir(path, models=None):
+def _stale(doc, models, labels_by_model):
+    """True when a provisional exclusion's model set no longer applies.
+
+    With labels_by_model, only the model that produces the label counts: a
+    vehicle-model swap on 2026-10-03 re-armed 55 animal and person exclusions
+    the ipcams model still needed, because the whole set had changed. Labels
+    no running model claims fall back to comparing the whole set.
+    """
+    was = set(doc.get("models") or ())
+    label = doc.get("seen_as") or doc.get("label") or ""
+    label = label[:-len("_road")] if label.endswith("_road") else label
+    producers = {m for m, labels in (labels_by_model or {}).items() if label in labels}
+    if producers:
+        return not producers <= was
+    return was != set(models)
+
+
+def load_dir(path, models=None, labels_by_model=None):
     """Read every *.yaml in path into {camera: {label: [box, ...]}}.
 
     `models` is the set of model files aicam is running right now. A
@@ -58,6 +75,9 @@ def load_dir(path, models=None):
     background example, so the next retrain is the thing that should have fixed
     it, and the retrain is what puts the blind spot back on trial. If the rock
     still reads as a rabbit, the next alert says so and costs one more tap.
+
+    `labels_by_model` maps each running model file to its class names, so that
+    retraining one model leaves the exclusions against the other in force.
 
     Passing models=None applies them regardless, which is what a tool that only
     wants to read the geometry (recheck_excludes.py) should get.
@@ -80,7 +100,7 @@ def load_dir(path, models=None):
                 continue
             if doc.get("provisional") and models is not None:
                 was = set(doc.get("models") or ())
-                if was != set(models):
+                if _stale(doc, models, labels_by_model):
                     logger.info(
                         "provisional exclusion %s was written against %s and the "
                         "models are now %s; letting it fire again",
@@ -108,7 +128,8 @@ def merge(base, extra):
     return out
 
 
-def load(json_path=None, dir_path=None, auto_dir=None, models=None):
+def load(json_path=None, dir_path=None, auto_dir=None, models=None,
+         labels_by_model=None):
     """Merged exclusions from the json file and the hand-written and auto dirs.
 
     Two directories, because the machine-written ones must not land in the
@@ -125,7 +146,7 @@ def load(json_path=None, dir_path=None, auto_dir=None, models=None):
     for path in (dir_path, auto_dir):
         if not path:
             continue
-        from_dir = load_dir(path, models)
+        from_dir = load_dir(path, models, labels_by_model)
         total = sum(len(b) for l in from_dir.values() for b in l.values())
         if total:
             logger.info("loaded %d exclusion(s) from %s", total, path)

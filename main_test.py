@@ -113,3 +113,12 @@ def test_model_files_copes_with_no_grey_model():
     config = ConfigParser()
     config.read_dict({"color-model": {"onnx": "a.onnx"}})
     assert main.model_files(config) == ["a.onnx"]
+
+
+def test_model_labels_maps_each_model_to_its_classes():
+    from configparser import ConfigParser
+    config = ConfigParser()
+    config.read_dict({"color-model": {"onnx": "/m/ipcams.onnx"},
+                      "vehicle-model": {"onnx": "/m/pv.onnx"}})
+    assert main.model_labels(config, ["dog", "person"], ["package", "vehicle"]) == {
+        "ipcams.onnx": {"dog", "person"}, "pv.onnx": {"package", "vehicle"}}

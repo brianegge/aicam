@@ -462,3 +462,34 @@ def test_successful_face_and_remini_taps_do_not_notify(monkeypatch):
     roboflow_upload.announce(200, {"remini": True, "message": "Chloe confirmed"}, "x")
     roboflow_upload.announce(200, {"face": True, "message": "Added to Lee"}, "x")
     assert sent == []
+
+
+class _Captured:
+    def __init__(self):
+        self.urls = []
+
+    def __call__(self, req, timeout=None):
+        self.urls.append(req.full_url)
+
+        class R:
+            def read(self):
+                return b'{"success": true, "id": "abc"}'
+        return R()
+
+
+def test_each_tag_is_its_own_query_parameter(monkeypatch):
+    """Joined with commas, Roboflow kept "auto-null,garden" as one tag."""
+    from urllib.parse import urlparse, parse_qs
+    cap = _Captured()
+    monkeypatch.setattr(roboflow_upload, "urlopen", cap)
+    roboflow_upload.upload_image("k", "ipcams2", "n", b"\xff", tags=["garden", "auto-null"])
+    assert parse_qs(urlparse(cap.urls[0]).query)["tag"] == ["auto-null", "garden"]
+
+
+def test_an_annotation_names_a_job_so_it_leaves_the_upload_batch(monkeypatch):
+    """Without jobName a null stays "not annotated" in the Annotate queue."""
+    from urllib.parse import urlparse, parse_qs
+    cap = _Captured()
+    monkeypatch.setattr(roboflow_upload, "urlopen", cap)
+    roboflow_upload.annotate_null("k", "ipcams2", "abc", "n", 640, 360)
+    assert parse_qs(urlparse(cap.urls[0]).query)["jobName"] == [roboflow_upload.ANNOTATION_JOB]

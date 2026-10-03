@@ -132,8 +132,11 @@ def upload_image(api_key, project_id, name, image_bytes, split="train", tags=Non
     """POST one image. Returns the Roboflow image id, or None."""
     query = {"api_key": api_key, "name": name, "split": split}
     if tags:
-        query["tag"] = ",".join(sorted(tags))
-    url = "https://api.roboflow.com/dataset/%s/upload?%s" % (project_id, urlencode(query))
+        # One tag= per tag. Joined with commas, Roboflow stored the whole string
+        # as a single tag ("auto-null,garden"), so no tag filter ever matched.
+        query["tag"] = sorted(tags)
+    url = "https://api.roboflow.com/dataset/%s/upload?%s" % (
+        project_id, urlencode(query, doseq=True))
     encoded = base64.b64encode(image_bytes).decode("utf-8")
     req = Request(url, data=encoded.encode("utf-8"), method="POST")
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
@@ -169,11 +172,20 @@ def build_voc(name, width, height, boxes=()):
     return "".join(parts)
 
 
+# Without a jobName the annotation is saved but the image stays in the
+# "Uploaded via API" batch, which the Annotate page lists as not annotated --
+# and the next auto-label run over that batch relabels it. With one, Roboflow
+# files it under a completed job, as the official SDK does. Verified against
+# the live API on 2026-10-03.
+ANNOTATION_JOB = "Annotated via API"
+
+
 def annotate(api_key, project_id, image_id, name, width, height, boxes=()):
     """Attach a Pascal VOC annotation. No boxes means a background example."""
     url = "https://api.roboflow.com/dataset/%s/annotate/%s?%s" % (
         project_id, image_id,
-        urlencode({"api_key": api_key, "name": name + ".xml"}))
+        urlencode({"api_key": api_key, "name": name + ".xml",
+                   "jobName": ANNOTATION_JOB}))
     body = build_voc(name, width, height, boxes).encode("utf-8")
     req = Request(url, data=body, method="POST")
     req.add_header("Content-Type", "text/xml")

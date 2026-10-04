@@ -6,8 +6,9 @@ is unusable on the phone -- the page goes white after a second -- so this does
 the same job through the channel aicam alerts already use:
 
   poll    `/api/faces` on the Frigate host for Train images it has not seen
-  send    one Pushover per sighting (the largest attempt of a Frigate event),
-          picture attached, linking to face-review.html on Home Assistant
+  send    one Pushover per sighting (the largest attempt of a Frigate event
+          that is fit to name -- see face_quality), picture attached, linking
+          to face-review.html on Home Assistant
   tap     the page calls the existing aicam_roboflow_review webhook with
           model=face, file=<train file>, cam=<name>; Home Assistant forwards
           that to the review server here, which calls classify() below
@@ -60,6 +61,18 @@ class FaceReviewConfig(object):
         # Smaller than this is not worth a person's time: Frigate's own
         # min_area is 4800 (~70x70), and nothing below it can be recognised.
         self.min_side = section.getint("min-side", 70)
+        # A face nobody could name is not worth asking about, and naming one
+        # anyway poisons the library: Frigate averages each person's images,
+        # so washed-out and side-on crops make that person's average a
+        # generic face others match (2026-10-03: nine such images in one
+        # person's folder drew 14 of 17 wrong names). Set on the 62 events in the
+        # Train tab that day, every rejected crop checked by eye.
+        self.max_blown = section.getfloat("max-blown", 0.25)
+        self.min_sharpness = section.getfloat("min-sharpness", 80.0)
+        self.max_yaw = section.getfloat("max-yaw", 0.5)
+        # YuNet, the same file Frigate uses (model_cache/facedet/facedet.onnx).
+        # Without it the side-on check is skipped and the other two still run.
+        self.face_detector = section.get("face-detector", "")
         # A burst (a party, a delivery crew) should not become forty
         # notifications at once; the rest wait for the next poll.
         self.max_per_poll = section.getint("max-per-poll", 5)
@@ -101,6 +114,37 @@ def group_by_event(train_files):
         if info:
             events.setdefault(info["event"], []).append(info)
     return events
+
+
+def face_quality(img, detector_path=""):
+    """Measure what makes a Train crop unusable. Returns (blown, sharpness, yaw).
+
+    blown      share of pixels at 245 or above in the middle half of the
+               crop, where the eyes, nose and mouth are. The whole crop
+               counted a bright wall, white hair and glare on glasses the
+               same as a whited-out face, and dropped two clear faces (17%
+               and 25%). The middle half reads 11% and 16% for those, and 76%
+               for the garage-lit face of 21:40 on 2026-10-03.
+    sharpness  variance of the Laplacian, at the crop's own size.
+    yaw        how far the nose sits from midway between the eyes, in eye
+               widths: 0 is facing the camera. None when no detector is
+               configured or it finds no face, which is 18 of 177 crops --
+               an unknown is not held against the face.
+    """
+    grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = grey.shape
+    blown = float((grey[h // 4:h - h // 4, w // 4:w - w // 4] >= 245).mean())
+    sharpness = float(cv2.Laplacian(grey, cv2.CV_64F).var())
+    yaw = None
+    if detector_path and os.path.exists(detector_path):
+        h, w = img.shape[:2]
+        found = cv2.FaceDetectorYN.create(detector_path, "", (w, h), 0.3).detect(img)[1]
+        if found is not None and len(found):
+            right_eye, left_eye, nose = found[0][4:10].reshape(3, 2)
+            eye_width = abs(left_eye[0] - right_eye[0])
+            if eye_width > 1:
+                yaw = float(abs(nose[0] - (right_eye[0] + left_eye[0]) / 2) / eye_width)
+    return blown, sharpness, yaw
 
 
 def page_link(page_url, filename, names):
@@ -191,8 +235,24 @@ class FaceReview(object):
             self._save_seen({e: s for e, s in seen.items() if e in events})
             return sent
 
+    def _unfit(self, img):
+        """Why this crop is not worth asking about, or None if it is."""
+        if min(img.shape[:2]) < self.cfg.min_side:
+            return "too small"
+        blown, sharpness, yaw = face_quality(img, self.cfg.face_detector)
+        if blown > self.cfg.max_blown:
+            return "washed out (%.0f%%)" % (blown * 100)
+        if sharpness < self.cfg.min_sharpness:
+            return "blurred (%.0f)" % sharpness
+        if yaw is not None and yaw > self.cfg.max_yaw:
+            return "turned away (%.2f)" % yaw
+        return None
+
     def _review_event(self, event_id, attempts, names):
-        best, best_img = None, None
+        # The largest attempt that is fit to name. Largest alone sent the
+        # worst of three at 21:40 on 2026-10-03: the biggest crop was also the
+        # most blown out.
+        best, best_img, reasons, readable = None, None, [], 0
         for a in attempts:
             try:
                 img = self.train_image(a["file"])
@@ -200,12 +260,21 @@ class FaceReview(object):
                 continue
             if img is None:
                 continue
+            readable += 1
+            why = self._unfit(img)
+            if why:
+                reasons.append(why)
+                continue
             if best_img is None or img.shape[0] * img.shape[1] > best_img.shape[0] * best_img.shape[1]:
                 best, best_img = a, img
-        if best is None:
+        if not readable:
             return "unreadable"
-        if min(best_img.shape[:2]) < self.cfg.min_side:
-            return "too small"
+        if best is None:
+            if all(r == "too small" for r in reasons):
+                return "too small"
+            logger.info("face review: not asking about %s, no attempt fit to name: %s",
+                        event_id, ", ".join(reasons))
+            return "unfit"
         if not self.cfg.pushover:
             logger.info("face review: no Pushover configured, not sending %s", best["file"])
             return "no pushover"

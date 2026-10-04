@@ -228,9 +228,31 @@ nothing, where every inline link is a bare GET.
 `face_review.py` runs inside the review server (`roboflow_upload.py`) when
 config.txt has a `[face-review]` section. It polls Frigate's `/api/faces`
 every minute and sends one Pushover per new sighting in the Train tab -- the
-largest attempt of each Frigate event, scaled up so the lock screen shows a
-face -- linking to `face-review.html` on Home Assistant. Built 2026-10-01
-because the Train tab goes white on the iPhone.
+largest attempt of each Frigate event that is fit to name, scaled up so the
+lock screen shows a face -- linking to `face-review.html` on Home Assistant.
+Built 2026-10-01 because the Train tab goes white on the iPhone.
+
+**Only faces fit to name are sent** (2026-10-03). Frigate averages each
+person's library images, so naming a washed-out or side-on crop makes that
+person's average a generic face that other people match: nine such images in
+one person's folder drew 14 of 17 wrong names. Each attempt is measured by
+`face_quality()` -- blown-out share of the middle half of the crop, Laplacian
+sharpness, and yaw from YuNet's eye and nose landmarks -- and an event where no
+attempt passes sends nothing (state `unfit`, reasons logged). Picking the
+largest attempt alone had sent the worst of three: the garage light at night
+whites out the biggest crop most. Replayed on the 62 events in the Train tab
+that day: 43 notifications became 29, and each of the 14 dropped was checked
+by eye (motion blur, profiles, the back of a head, one non-face, the garage
+light). The blown-out share is measured on the middle half because the whole
+crop counted a bright wall, white hair and glare on glasses, and dropped two
+clear faces.
+
+The yaw check needs `face-detector`, Frigate's own YuNet file copied to
+`/Users/claw/aicam-models/facedet.onnx` (sha256 `321aa5a6...`, from
+`/opt/frigate/config/model_cache/facedet/` on frigate.home). OpenCV 5 here
+reads the same landmarks as Frigate's 4.x to two decimals and logs a harmless
+"Targets are not supported by the new graph engine" warning. Without the file
+the other two checks still run.
 
 ```
 [face-review]
@@ -239,6 +261,10 @@ page-url = https://<nabu-casa>/local/face-review.html
 # min-side = 70        smaller crops cannot be recognised, so are not sent
 # max-per-poll = 5     a burst waits for the next poll instead of flooding
 # priority = 0 / sound = none
+face-detector = /Users/claw/aicam-models/facedet.onnx
+# max-blown = 0.25     share of the middle half at 245+ (garage light: 0.76)
+# min-sharpness = 80   Laplacian variance; motion blur reads 18-54
+# max-yaw = 0.5        nose offset from mid-eyes, in eye widths; profiles 0.7+
 ```
 
 A tap goes through the **existing** `aicam_roboflow_review` webhook, no new

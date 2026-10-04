@@ -9,8 +9,13 @@ import pytest
 import face_review as fr
 
 
-def webp(w, h):
-    ok, buf = cv2.imencode(".webp", np.full((h, w, 3), 128, np.uint8))
+def webp(w, h, level=128, blur=0):
+    """A textured crop: sharp and not blown out unless asked to be."""
+    rng = np.random.default_rng(w * 1000 + h)
+    img = np.clip(rng.normal(level, 40, (h, w, 3)), 0, 255).astype(np.uint8)
+    if blur:
+        img = cv2.GaussianBlur(img, (0, 0), blur)
+    ok, buf = cv2.imencode(".webp", img, [cv2.IMWRITE_WEBP_QUALITY, 100])
     return buf.tobytes()
 
 
@@ -177,3 +182,49 @@ def test_page_link_drops_names_to_fit_pushover():
 def test_classify_needs_a_name(tmp_path, name):
     rev = make(tmp_path, FakeHTTP([A2], {}))
     assert rev.classify(A2, name)[0] == 400
+
+
+# --- only faces fit to name are sent -----------------------------------------
+
+def test_a_washed_out_face_is_not_sent(tmp_path):
+    """21:40 on 2026-10-03: the garage light whited out every attempt."""
+    http = FakeHTTP([], {B1: webp(140, 160, level=250)})
+    rev = make(tmp_path, http)
+    rev.poll_once()
+    http.train.append(B1)
+    assert rev.poll_once() == 0 and http.pushes == []
+    assert json.load(open(rev.cfg.state_path))[B1.split("-1790000101")[0]] == "unfit"
+
+
+def test_a_blurred_face_is_not_sent(tmp_path):
+    http = FakeHTTP([], {B1: webp(140, 160, blur=4)})
+    rev = make(tmp_path, http)
+    rev.poll_once()
+    http.train.append(B1)
+    assert rev.poll_once() == 0 and http.pushes == []
+
+
+def test_the_largest_fit_attempt_wins_over_a_larger_unfit_one(tmp_path):
+    """Largest alone picked the most blown-out of the three."""
+    http = FakeHTTP([], {A1: webp(90, 90), A2: webp(150, 150, level=250)})
+    rev = make(tmp_path, http)
+    rev.poll_once()
+    http.train += [A1, A2]
+    assert rev.poll_once() == 1
+    assert parse_qs(urlparse(http.pushes[0]["url"]).query)["file"] == [A1]
+
+
+def test_quality_thresholds_are_configurable(tmp_path):
+    http = FakeHTTP([], {B1: webp(140, 160, level=250)})
+    rev = make(tmp_path, http, **{"max-blown": "0.9"})
+    rev.poll_once()
+    http.train.append(B1)
+    assert rev.poll_once() == 1
+
+
+def test_face_quality_measures_the_crop():
+    flat = np.full((100, 100, 3), 128, np.uint8)
+    white = np.full((100, 100, 3), 255, np.uint8)
+    assert fr.face_quality(white)[0] == 1.0
+    assert fr.face_quality(flat)[1] == 0.0
+    assert fr.face_quality(flat)[2] is None        # no detector configured

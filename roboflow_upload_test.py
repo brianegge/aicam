@@ -110,6 +110,15 @@ class TestVerdicts:
         assert boxes == [("deer", 0.1, 0.2, 0.02, 0.03)]
         assert not api["null"].called
 
+    def test_each_project_gets_only_its_own_classes(self, review, api):
+        """A person+vehicle frame put a vehicle class into ipcams2."""
+        _rewrite_boxes(review, [
+            {"label": "person", "left": 0.1, "top": 0.2, "width": 0.05, "height": 0.2},
+            {"label": "vehicle_road", "left": 0.5, "top": 0.1, "width": 0.3, "height": 0.2}])
+        roboflow_upload._do_upload("abc123.jpg|correct", "m", "c", {"person", "vehicle"})
+        sent = {c[0][1]: [b[0] for b in c[0][6]] for c in api["annotate"].call_args_list}
+        assert sent == {"ipcams2": ["person"], "pv2": ["vehicle"]}
+
     def test_false_annotates_with_no_boxes_at_all(self, review, api):
         code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
         assert code == 200 and result["verdict"] == "false"

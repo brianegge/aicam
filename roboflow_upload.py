@@ -538,7 +538,12 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
             continue
         try:
             if verdict == "correct":
-                annotate(_config.api_key, project_id, image_id, name, width, height, boxes)
+                # Only this project's classes: a person+vehicle frame went to
+                # both projects with both boxes, adding a vehicle class to
+                # ipcams2 and a person class to packages-vehicles2.
+                classes = _config.projects[project_id]
+                annotate(_config.api_key, project_id, image_id, name, width, height,
+                         [b for b in boxes if b[0] in classes])
             else:
                 annotate_null(_config.api_key, project_id, image_id, name, width, height)
             annotated.append(project_id)

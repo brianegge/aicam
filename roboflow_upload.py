@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import sys
+import time
 from configparser import ConfigParser
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -48,6 +49,11 @@ class Config(object):
         # see handled(). Beside review/, not in it: cleanup-capture.sh ages
         # review/ file by file, and this is rewritten on every tap.
         self.handled_path = os.path.join(self.save_path, "review-handled.json")
+        # Where a tapped frame and its sidecar go instead of being deleted, so
+        # a second tap with a different verdict can still annotate and
+        # silence. Pruned after DONE_KEEP_DAYS.
+        self.done_dir = os.path.join(self.save_path, "review-done")
+        self.workspace = section.get("workspace", "egge-public")
         # Exclusions written by an "all false" tap. Beside the captures, never
         # in the checkout: `excludes/` is audited geometry under version
         # control, and a deploy's `git stash -u` once swept every untracked
@@ -180,19 +186,21 @@ def build_voc(name, width, height, boxes=()):
 ANNOTATION_JOB = "Annotated via API"
 
 
-def annotate(api_key, project_id, image_id, name, width, height, boxes=()):
+def annotate(api_key, project_id, image_id, name, width, height, boxes=(),
+             overwrite=False):
     """Attach a Pascal VOC annotation. No boxes means a background example."""
+    query = {"api_key": api_key, "name": name + ".xml", "jobName": ANNOTATION_JOB}
+    if overwrite:
+        query["overwrite"] = "true"
     url = "https://api.roboflow.com/dataset/%s/annotate/%s?%s" % (
-        project_id, image_id,
-        urlencode({"api_key": api_key, "name": name + ".xml",
-                   "jobName": ANNOTATION_JOB}))
+        project_id, image_id, urlencode(query))
     body = build_voc(name, width, height, boxes).encode("utf-8")
     req = Request(url, data=body, method="POST")
     req.add_header("Content-Type", "text/xml")
     return urlopen(req, timeout=30).read().decode("utf-8")
 
 
-def annotate_null(api_key, project_id, image_id, name, width, height):
+def annotate_null(api_key, project_id, image_id, name, width, height, overwrite=False):
     """Mark an uploaded image as a background example.
 
     Uploading alone is not enough: an image with no annotation record is a
@@ -208,7 +216,18 @@ def annotate_null(api_key, project_id, image_id, name, width, height):
     2026-09-13; the result reads back as {"count": 0, "classes": {}}, the same
     shape as an image marked null by hand in the web UI.
     """
-    return annotate(api_key, project_id, image_id, name, width, height)
+    return annotate(api_key, project_id, image_id, name, width, height,
+                    overwrite=overwrite)
+
+
+def retag(api_key, workspace, image_id, add=(), remove=()):
+    """Swap tags on an image already in Roboflow (its verdict-* tag)."""
+    body = json.dumps({"addTags": list(add), "removeTags": list(remove)}).encode("utf-8")
+    url = "https://api.roboflow.com/%s/images/%s/metadata?%s" % (
+        workspace, image_id, urlencode({"api_key": api_key}))
+    req = Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    return urlopen(req, timeout=30).read().decode("utf-8")
 
 
 _config = None
@@ -425,6 +444,7 @@ def silence(cam, filename, box, model, image_bytes):
 
 
 HANDLED_DAYS = 30
+DONE_KEEP_DAYS = 7
 
 
 def _load_handled():
@@ -457,6 +477,11 @@ def remember_handled(filename, result):
     ledger[filename] = {"when": now.isoformat(timespec="seconds"),
                         "verdict": result.get("verdict"),
                         "message": tap_message(200, result, filename)}
+    # What a changed verdict needs to rewrite this one.
+    for key in ("images", "name", "cam", "model"):
+        if result.get(key):
+            ledger[filename][key] = result[key]
+    _prune_done(now)
     tmp = _config.handled_path + ".tmp"
     try:
         with open(tmp, "w") as f:
@@ -464,6 +489,122 @@ def remember_handled(filename, result):
         os.replace(tmp, _config.handled_path)
     except OSError as e:
         logger.warning("could not record the tap on %s: %s", filename, e)
+
+
+def _prune_done(now):
+    cutoff = time.time() - DONE_KEEP_DAYS * 86400
+    for fn in glob.glob(os.path.join(_config.done_dir, "*")):
+        try:
+            if os.path.getmtime(fn) < cutoff:
+                os.remove(fn)
+        except OSError:
+            pass
+
+
+def _retire(filename):
+    """Move a tapped frame and its sidecar out of review/ (or delete them)."""
+    stem = os.path.splitext(filename)[0]
+    for fn in (filename, stem + ".json"):
+        src = os.path.join(_config.review_dir, fn)
+        if not os.path.exists(src):
+            continue
+        try:
+            if _config.delete_after_upload:
+                os.makedirs(_config.done_dir, exist_ok=True)
+                os.replace(src, os.path.join(_config.done_dir, fn))
+                logger.info("Moved review file %s to %s", src, _config.done_dir)
+        except OSError as e:
+            logger.warning("Failed to retire %s: %s", src, e)
+
+
+def unsilence(filename):
+    """Remove the exclusions a false tap on this frame wrote."""
+    try:
+        import yaml
+    except ImportError:
+        return []
+    removed = []
+    for directory in (_config.auto_dir, _config.pending_dir):
+        for fn in glob.glob(os.path.join(directory, "*.yaml")):
+            try:
+                with open(fn) as f:
+                    doc = yaml.safe_load(f) or {}
+            except Exception:
+                continue
+            if doc.get("source_review") != filename:
+                continue
+            stem = os.path.splitext(fn)[0]
+            for ext in (".yaml", ".jpg"):
+                try:
+                    os.remove(stem + ext)
+                except OSError:
+                    pass
+            removed.append(os.path.basename(stem))
+    return removed
+
+
+def _change_verdict(filename, earlier, verdict):
+    """A second tap that disagrees with the first: rewrite what the first did.
+
+    2026-10-05: "correct" was tapped on a false positive, and the right answer
+    a second later only got "Already done".
+    """
+    images = earlier.get("images") or {}
+    if not images:
+        return (409, {"error": "%s was tapped before verdicts could be changed; "
+                               "fix it in Roboflow" % filename})
+    sidecar = read_sidecar(_config.done_dir, filename)
+    width, height = sidecar.get("width"), sidecar.get("height")
+    boxes = [(base_label(b["label"]), b["left"], b["top"], b["width"], b["height"])
+             for b in sidecar.get("boxes") or ()]
+    if not (width and height) or (verdict == "correct" and not boxes):
+        return (409, {"error": "the frame for %s is gone; fix it in Roboflow" % filename})
+    name, cam, model = earlier.get("name"), earlier.get("cam"), earlier.get("model")
+    annotated = []
+    for project_id, image_id in sorted(images.items()):
+        try:
+            if verdict == "correct":
+                classes = _config.projects.get(project_id, set())
+                annotate(_config.api_key, project_id, image_id, name, width, height,
+                         [b for b in boxes if b[0] in classes], overwrite=True)
+            elif verdict == "false":
+                annotate_null(_config.api_key, project_id, image_id, name, width, height,
+                              overwrite=True)
+            retag(_config.api_key, _config.workspace, image_id,
+                  add=["verdict-%s" % verdict] if verdict != "flag" else [],
+                  remove=["verdict-%s" % earlier.get("verdict")])
+            annotated.append(project_id)
+        except (HTTPError, URLError) as e:
+            logger.warning("Changing %s in %s to %s failed: %s", name, project_id, verdict, e)
+    if not annotated:
+        return (502, {"error": "could not change the verdict in Roboflow"})
+    result = {"status": "changed", "file": filename, "verdict": verdict,
+              "was": earlier.get("verdict"), "projects": annotated,
+              "images": images, "name": name, "cam": cam, "model": model}
+    if earlier.get("verdict") == "false":
+        result["unsilenced"] = unsilence(filename)
+    if verdict == "false":
+        silenced, pending = [], []
+        try:
+            with open(os.path.join(_config.done_dir, filename), "rb") as f:
+                image_data = f.read()
+        except IOError:
+            image_data = None
+        for box in (sidecar.get("boxes") or ()) if image_data else ():
+            try:
+                stem, live = silence(cam, filename, box, model, image_data)
+            except Exception:
+                logger.exception("could not silence %s on %s", box.get("label"), cam)
+                continue
+            (silenced if live else pending).append(stem)
+        if silenced:
+            result["silenced"] = silenced
+        if pending:
+            result["pending_exclusions"] = pending
+    logger.info("%s: verdict changed %s -> %s in %s", filename, earlier.get("verdict"),
+                verdict, ", ".join(annotated))
+    remember_handled(filename, result)
+    return (200, result)
 
 
 def _do_upload(filename, model, cam, detection_tags, verdict=None):
@@ -476,6 +617,8 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
 
     if not os.path.isfile(filepath):
         earlier = handled(filename)
+        if earlier and verdict in ("correct", "false") and verdict != earlier.get("verdict"):
+            return _change_verdict(filename, earlier, verdict)
         if earlier:
             return (200, {"status": "already", "file": filename,
                           "verdict": earlier.get("verdict"),
@@ -520,6 +663,7 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
         upload_tags.append("verdict-%s" % verdict)
     uploaded = []
     annotated = []
+    images = {}
 
     for project_id in target_projects:
         try:
@@ -534,6 +678,8 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
             continue
         logger.info("Uploaded %s to %s as %s (%s)", filename, project_id, image_id, verdict)
         uploaded.append(project_id)
+        if image_id:
+            images[project_id] = image_id
         if verdict == "flag" or not image_id:
             continue
         try:
@@ -569,20 +715,11 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
         if pending:
             logger.info("%s: held back %s, see the file for why", cam, ", ".join(pending))
 
-    if _config.delete_after_upload:
-        try:
-            os.remove(filepath)
-            logger.info("Deleted review file %s", filepath)
-        except OSError as e:
-            logger.warning("Failed to delete %s: %s", filepath, e)
-        try:
-            os.remove(os.path.join(_config.review_dir,
-                                   os.path.splitext(filename)[0] + ".json"))
-        except OSError:
-            pass
+    _retire(filename)
 
     result = {"status": "uploaded", "file": filename, "projects": uploaded,
-              "verdict": verdict}
+              "verdict": verdict, "images": images, "name": name, "cam": cam,
+              "model": model}
     if annotated:
         result["annotated"] = annotated
     if silenced:
@@ -613,6 +750,21 @@ def tap_message(code, result, filename):
         return "Already done at %s: %s" % (when, result.get("message") or result.get("verdict"))
     verdict = result.get("verdict", "flag")
     where = ", ".join(result.get("projects") or ()) or "nowhere"
+    if result.get("status") == "changed":
+        was = {"correct": "confirmed", "false": "false", "flag": "flagged"}.get(
+            result.get("was"), result.get("was"))
+        if verdict == "correct":
+            line = "Changed from %s: confirmed in %s" % (was, where)
+            if result.get("unsilenced"):
+                line += "; unsilenced %s" % ", ".join(result["unsilenced"])
+            return line
+        parts = []
+        if result.get("silenced"):
+            parts.append("silenced %s until the models change" % ", ".join(result["silenced"]))
+        if result.get("pending_exclusions"):
+            parts.append("held back %s, not silenced" % ", ".join(result["pending_exclusions"]))
+        return "Changed from %s: background example in %s; %s" % (
+            was, where, "; ".join(parts) or "nothing to silence")
     if verdict == "correct":
         return "Confirmed, added to %s" % where
     if verdict == "false":

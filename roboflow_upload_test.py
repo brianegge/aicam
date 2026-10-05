@@ -502,3 +502,52 @@ def test_an_annotation_names_a_job_so_it_leaves_the_upload_batch(monkeypatch):
     monkeypatch.setattr(roboflow_upload, "urlopen", cap)
     roboflow_upload.annotate_null("k", "ipcams2", "abc", "n", 640, 360)
     assert parse_qs(urlparse(cap.urls[0]).query)["jobName"] == [roboflow_upload.ANNOTATION_JOB]
+
+
+@pytest.fixture
+def retiring(review):
+    """The deployed setting: a tapped frame leaves review/ for review-done/."""
+    roboflow_upload._config.delete_after_upload = True
+    roboflow_upload._config.auto_dir = str(review.parent.parent / "excludes-auto")
+    roboflow_upload._config.pending_dir = os.path.join(roboflow_upload._config.auto_dir, "pending")
+    with mock.patch.object(roboflow_upload, "retag") as tag, \
+         mock.patch.object(roboflow_upload, "current_models", return_value=["m.onnx"]):
+        yield {"review": review, "retag": tag}
+
+
+class TestChangedVerdict:
+    """2026-10-05: correct was tapped on a false positive; false only got "Already done"."""
+
+    def test_false_after_correct_rewrites_the_upload_and_silences(self, retiring, api):
+        roboflow_upload._do_upload("abc123.jpg|correct", "", "", set())
+        assert not (retiring["review"] / "abc123.jpg").exists()
+        code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        assert code == 200 and result["status"] == "changed"
+        assert api["null"].call_args[1]["overwrite"] is True
+        assert api["null"].call_args[0][2] == "img1"
+        assert retiring["retag"].call_args[1] == {"add": ["verdict-false"],
+                                                  "remove": ["verdict-correct"]}
+        assert result["silenced"]
+        assert api["upload"].call_count == 1  # the second tap does not upload again
+        msg = roboflow_upload.tap_message(code, result, "abc123.jpg")
+        assert msg.startswith("Changed from confirmed")
+
+    def test_correct_after_false_unsilences_what_that_tap_wrote(self, retiring, api):
+        _, first = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        assert first["silenced"]
+        code, result = roboflow_upload._do_upload("abc123.jpg|correct", "", "", set())
+        assert code == 200 and result["unsilenced"] == first["silenced"]
+        assert api["annotate"].call_args[1]["overwrite"] is True
+        auto = roboflow_upload._config.auto_dir
+        assert not [f for f in os.listdir(auto) if f.endswith(".yaml")]
+
+    def test_the_same_verdict_twice_is_still_already_done(self, retiring, api):
+        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        assert result["status"] == "already"
+        assert not retiring["retag"].called
+
+    def test_a_flag_after_a_verdict_does_not_undo_it(self, retiring, api):
+        roboflow_upload._do_upload("abc123.jpg|correct", "", "", set())
+        _, result = roboflow_upload._do_upload("abc123.jpg", "", "", set())
+        assert result["status"] == "already"

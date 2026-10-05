@@ -154,6 +154,14 @@ Three verdicts, since 2026-09-20:
 | ✓ All correct | uploaded and annotated with the boxes from the alert |
 | ✗ All false | uploaded with a zero-box VOC annotation (background), **and the spot silenced** until the model changes — see below |
 
+**A second tap with the other verdict replaces the first** (2026-10-05). The
+tapped frame and sidecar move to `review-done/` (kept 7 days) rather than being
+deleted, and `review-handled.json` keeps the Roboflow image ids. So
+correct→false re-annotates them as background, swaps the `verdict-*` tag and
+silences the spot, and false→correct does the reverse and removes the
+exclusions whose `source_review` is that frame. The same verdict twice, or a
+flag after a verdict, still answers "Already done".
+
 Pushover allows **one** `url` per message, so "all correct" and "all false" are
 `<a href>` links in the message body (`html=1`) and the supplementary link
 stays "Flag for Review". The verdict rides on the file name —

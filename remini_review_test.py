@@ -324,3 +324,18 @@ def test_a_tap_corrects_an_accepted_guess_but_not_a_persons_answer(tmp_path):
     code, res = r.confirm(a, "face:1")       # the correction
     assert code == 200 and r._load(a)["state"] == "trained" and r._load(a)["chloe_face"] == 1
     assert r.confirm(b, "yes")[0] == 409     # a person's own answer is not overwritten
+
+
+def test_outfit_check_uses_its_own_key_when_set(tmp_path):
+    r, _, _ = make(tmp_path, **{"api-key": "own"})
+    assert r.cfg.outfit_key == "own"
+
+
+def test_outfit_check_falls_back_to_the_verify_key(tmp_path):
+    r, _, _ = make(tmp_path)
+    assert r.cfg.outfit_key == "k"
+
+
+def test_outfit_check_can_be_turned_off(tmp_path):
+    r, _, _ = make(tmp_path, **{"api-key": "own", "outfit-check": "false"})
+    assert r.cfg.outfit_key is None

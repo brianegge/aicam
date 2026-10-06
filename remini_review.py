@@ -94,9 +94,12 @@ class ReminiReviewConfig(object):
         # [verify] OpenRouter account) with a contact sheet of the day's
         # confirmed photos of her -- children wear one outfit all day. On the
         # 2026-09-17 test it was 8/8 on answered photos at ~$0.003 each.
+        # Its own `api-key` here, so its spend shows separately on OpenRouter;
+        # [verify]'s key is the fallback.
         v = config["verify"] if config.has_section("verify") else None
         self.outfit_model = s.get("outfit-model", v.get("model", "google/gemini-3.8-flash") if v else "")
-        self.outfit_key = v.get("api-key") if v is not None and s.getboolean("outfit-check", True) else None
+        key = s.get("api-key") or (v.get("api-key") if v is not None else None)
+        self.outfit_key = key if s.getboolean("outfit-check", True) else None
         self.held_days = s.getint("keep-held-days", 3)
         self.dir = s.get("dir", os.path.join(config["detector"]["save-path"], "remini"))
         self.pushover = (config["pushover"]["token"], config["pushover"]["user"]) \

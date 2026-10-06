@@ -14,6 +14,7 @@ from PIL import Image
 
 import alpr
 import autolabel
+import confirm
 import frigate_events
 import frigate_lpr
 import verify
@@ -495,6 +496,9 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         ] = f"{e['tagName']} departed from {cam.name} after being seen {e['age']} times over the past {t}"
         e["departed"] = True
         logger.info(e["msg"])
+        if e.get("unconfirmed"):
+            # Never announced, so its departure is not news either.
+            continue
         if datetime.now() - e["start_time"] > timedelta(minutes=2) and e["age"] > 4:
             notify_expired.append(e)
     if len(notify_expired):
@@ -513,7 +517,17 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         )
         notify_time += timer() - notify_start
 
-    new_objects = set(p["tagName"] for p in new_predictions)
+    # Animals alert only once seen to move; see confirm.py. Held tracks stay in
+    # valid_predictions for counts and tracking but are kept out of the alert.
+    gate = confirm.gate_for(config)
+    if gate is not None:
+        arrivals = confirm.apply(
+            gate, valid_predictions, new_predictions, tracked_pairs, hold_now)
+        alert_predictions = [p for p in valid_predictions if not p.get("unconfirmed")]
+    else:
+        arrivals = new_predictions
+        alert_predictions = valid_predictions
+    new_objects = set(p["tagName"] for p in arrivals)
     min_age = 1000000
     for p in valid_predictions:
         if "age" in p:
@@ -569,10 +583,11 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
 
     # Notify on movement, and also when a plate is read for the first time.
     if len(new_objects) or new_plates:
-        seen = label_with_confidence(valid_objects, valid_predictions)
+        seen = label_with_confidence(
+            set(p["tagName"] for p in alert_predictions), alert_predictions)
         # Say when the second opinion could not be had. A gate that fails open
         # silently reads exactly like a gate that passed the detection.
-        unverified = verify.unverified_note(valid_predictions)
+        unverified = verify.unverified_note(alert_predictions)
         if cam.name in ["driveway", "garage"]:
             message = "%s in %s" % (seen, cam.name) + unverified
         elif cam.name == "shed":
@@ -585,12 +600,12 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
             message = "%s near %s" % (seen, cam.name) + unverified
         if cam.age > 2 or "once" in config["detector"]:
             notify_start = timer()
-            priority = notify(cam, message, im_pil, valid_predictions, config, ha, model_name=model_name, original_image=image)
+            priority = notify(cam, message, im_pil, alert_predictions, config, ha, model_name=model_name, original_image=image)
             notify_time += timer() - notify_start
             # Frigate's COCO model cannot see most of what this alerts on;
             # without an event it keeps no clip. See frigate_events.py.
             try:
-                frigate_events.mark(cam, valid_predictions, config)
+                frigate_events.mark(cam, alert_predictions, config)
             except Exception:
                 logger.exception("frigate event for %s failed", cam.name)
         else:
@@ -671,6 +686,8 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
             o += ":pt={}".format(p["priority_type"])
         if "age" in p:
             o += ":age={}".format(p["age"])
+        if p.get("unconfirmed"):
+            o += ":unconfirmed"
         return o
 
     return (

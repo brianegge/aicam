@@ -2,6 +2,7 @@
 and for how long a track survives once the detector stops seeing it."""
 
 import configparser
+import json
 from datetime import datetime
 
 import pytest
@@ -443,3 +444,33 @@ def test_the_parcel_survives_on_the_camera_that_lowered_the_bar():
     kept = apply_thresholds([package], globals_, None, 0.7, {}, now,
                             _section({"package": "0.60"}))
     assert len(kept) == 1 and "hold_only" not in kept[0]
+
+
+def test_publish_vehicles_sends_every_vehicle_box_under_the_frigate_camera():
+    """lpr-enrich asks this, not Frigate, whether a parked car is still there."""
+    from unittest import mock as _mock
+    import detect as _detect
+    cam = _mock.Mock(vehicle_check=True, frigate_name="garage")
+    preds = [
+        {"tagName": "vehicle", "probability": 0.931,
+         "boundingBox": {"left": 0.64, "top": 0.1, "width": 0.36, "height": 0.83},
+         "ignore": "static"},
+        {"tagName": "person", "probability": 0.9,
+         "boundingBox": {"left": 0.1, "top": 0.1, "width": 0.1, "height": 0.3}},
+        {"tagName": "vehicle_road", "probability": 0.8,
+         "boundingBox": {"left": 0.0, "top": 0.0, "width": 0.1, "height": 0.1}},
+    ]
+    _detect.publish_vehicles(cam, preds)
+    topic, payload = cam.publish.call_args[0]
+    assert topic == "aicam/vehicles/garage" and cam.publish.call_args[1] == {"retain": True}
+    body = json.loads(payload)
+    assert body["camera"] == "garage" and body["ts"] > 0
+    assert body["vehicles"] == [{"box": [0.64, 0.1, 0.36, 0.83], "score": 0.931}]
+
+
+def test_publish_vehicles_is_silent_for_a_camera_without_vehicle_checks():
+    from unittest import mock as _mock
+    import detect as _detect
+    cam = _mock.Mock(vehicle_check=False, frigate_name="play")
+    _detect.publish_vehicles(cam, [])
+    cam.publish.assert_not_called()

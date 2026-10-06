@@ -307,3 +307,12 @@ def test_an_unreachable_home_assistant_still_notifies_dogs():
     with mock.patch.object(ha, "get_state", side_effect=RuntimeError("down"),
                            create=True):
         assert ha.pet_sitter_mode() is False
+
+
+def test_a_vehicle_in_the_garage_is_not_announced(tmp_path):
+    """The garage camera detects vehicles only so lpr-enrich can ask whether a
+    parked car is still there; a car inside has already arrived."""
+    car = {"tagName": "vehicle", "probability": 0.93, "camName": "garage",
+           "boundingBox": {"left": 0.64, "top": 0.10, "width": 0.36, "height": 0.83},
+           "center": {"x": 0.82, "y": 0.51}}
+    assert _review_post([car], "vehicle in garage", tmp_path) is None

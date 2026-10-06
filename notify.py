@@ -264,6 +264,14 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
         elif tagName == "person" and cam.name == "garage":
             i = -3
             i_type = "person in garage rule"
+        elif tagName == "vehicle" and cam.name == "garage":
+            # Detected so lpr-enrich can ask whether a parked car is still
+            # there (detect.publish_vehicles); the outdoor cameras announce
+            # arrivals, and a car in the garage is one that already arrived.
+            # -4, not -3: notify posts anything >= -3, and Pushover refuses a
+            # priority below -2.
+            i = -4
+            i_type = "vehicle in garage rule"
         elif tagName == "person" and has_person and not notify_person:
             i = -4
             # we are still outside, keep detection off

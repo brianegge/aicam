@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.parse
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
@@ -164,6 +165,14 @@ class Camera:
         # whether it currently has the main stream decoded or only the
         # substream, which it then upscales.
         snapshot_url = config.get("snapshot-url", None)
+        # The Frigate camera this frame comes from, read off go2rtc's `src=`.
+        # Vehicle boxes are published under it (see detect.publish_vehicles),
+        # and lpr-enrich compares them with Frigate's boxes for the same
+        # camera: the same stream, so the same normalised frame.
+        self.frigate_name = None
+        if snapshot_url:
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(snapshot_url).query)
+            self.frigate_name = (query.get("src") or [None])[0]
         if snapshot_url:
             # One fetch, at full resolution; resize() downscales it for the
             # model. Detection, tracking, bounding boxes and the notification

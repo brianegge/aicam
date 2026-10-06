@@ -25,6 +25,39 @@ from utils import bb_intersection_over_union, draw_bbox, draw_road
 logger = logging.getLogger(__name__)
 
 
+
+def publish_vehicles(cam, predictions):
+    """Tell lpr-enrich where every vehicle stands, each sweep.
+
+    Frigate is fast on a car that moves and blind to one that does not: it
+    detects only where there is motion, so once it drops a parked car nothing
+    looks again until something moves. In the garage it dropped and re-found
+    the two parked cars 150 times a day (2026-10-06), and lpr-enrich could not
+    tell a quiet car from a departed one. This sweep runs on a clock, not on
+    motion, so lpr-enrich asks it instead.
+
+    Every vehicle on the property side of the road, excluded spots included:
+    a parked car is exactly what is wanted here. Retained, with a timestamp,
+    so a stale answer is recognisable as one.
+    """
+    if not (cam.vehicle_check and getattr(cam, "frigate_name", None)):
+        return
+    vehicles = []
+    for p in predictions:
+        if p["tagName"] != "vehicle":
+            continue
+        b = p["boundingBox"]
+        vehicles.append({
+            "box": [round(b["left"], 4), round(b["top"], 4),
+                    round(b["width"], 4), round(b["height"], 4)],
+            "score": round(float(p["probability"]), 3),
+        })
+    cam.publish("aicam/vehicles/%s" % cam.frigate_name,
+                json.dumps({"ts": round(time.time(), 1), "camera": cam.frigate_name,
+                            "vehicles": vehicles}),
+                retain=True)
+
+
 def add_centers(predictions):
     for p in predictions:
         bbox = p["boundingBox"]
@@ -371,6 +404,8 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
                 if iou > 0.5:
                     p["ignore"] = e.get("comment", "static iou {}".format(iou))
                     break
+
+    publish_vehicles(cam, predictions)
 
     # A second opinion on fresh wildlife detections, from a vision model that
     # gets the original pixels rather than the 608x608 stretch the detector

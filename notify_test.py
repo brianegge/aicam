@@ -316,3 +316,12 @@ def test_a_vehicle_in_the_garage_is_not_announced(tmp_path):
            "boundingBox": {"left": 0.64, "top": 0.10, "width": 0.36, "height": 0.83},
            "center": {"x": 0.82, "y": 0.51}}
     assert _review_post([car], "vehicle in garage", tmp_path) is None
+
+
+def test_a_person_in_the_garage_is_not_posted_at_an_invalid_priority(tmp_path):
+    """The -3 rules were posted and refused by Pushover, 337 times out of 337:
+    it accepts -2..2 only."""
+    person = {"tagName": "person", "probability": 0.9, "camName": "garage",
+              "boundingBox": {"left": 0.3, "top": 0.2, "width": 0.1, "height": 0.4},
+              "center": {"x": 0.35, "y": 0.4}}
+    assert _review_post([person], "person in garage", tmp_path) is None

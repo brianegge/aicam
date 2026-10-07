@@ -550,6 +550,14 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
                             cam.name, len(message))
             except Exception:
                 logger.exception("Failed to save review image")
+        if priority < -2:
+            # Pushover takes -2..2 and refuses anything else with a 400, so the
+            # -3 rules (a person or a vehicle where one is expected) were never
+            # delivered -- they were 337 of 337 rejections in aicam.log by
+            # 2026-10-06. Not sending them keeps exactly what anyone saw, and
+            # the review image above is still saved.
+            logger.info("%s: not sending p%s, below Pushover's -2", cam.name, priority)
+            return priority
         try:
             r = requests.post(
                 "https://api.pushover.net/1/messages.json",

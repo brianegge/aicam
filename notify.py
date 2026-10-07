@@ -432,12 +432,18 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
             if vehicle_message is not None:
                 if vehicle_message == "":
                     vehicle_message = "Vehicle"
-                if notify_vehicle:
-                    if cam.name == "shed":
-                        ha.echo_speaks(f"{vehicle_message} in front of garage")
-                    else:
-                        ha.echo_speaks(f"{vehicle_message} in driveway")
-                # don't announce plate
+                # Spoken aloud by lpr-enrich since 2026-09-26, not here. Both
+                # services were building this same sentence out of the same
+                # plate record -- ours arrives via the license-plates.json
+                # sync_plates.py generates -- and lpr-enrich knows the car
+                # better: the sightings history, a vision model for the ones
+                # with no history, geometry for where the car actually stands,
+                # and a description for the vans that never show a plate. It
+                # says it once per arrival rather than once per camera.
+                #
+                # This notification is unchanged, and still goes out on
+                # detection, which is well before lpr-enrich has finished
+                # identifying anything.
                 message += "\n" + vehicle_message + " " + plate
         if house_cleaner_found:
             ha.house_cleaners_arrived()

@@ -144,6 +144,13 @@ class HomeAssistant:
             return False
 
     def echo_speaks(self, message: str) -> Any:
+        """Say something on the kitchen speaker, if anyone is home to hear it.
+
+        No live caller since 2026-09-26: vehicle announcements moved to
+        lpr-enrich, which identifies the car far better than a plate match
+        here can. Kept for the package-delivery announcements commented out in
+        notify.py, which are the other thing this was ever used for.
+        """
         if self.get_presence("group.egge"):
             log.info("Speaking {}".format(message))
             json = {"message": message, "data": {"type": "tts"}}

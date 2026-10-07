@@ -187,6 +187,11 @@ def main():
     parser.add_argument("--dataset", required=True, help="dataset root (contains the split dirs)")
     parser.add_argument("--split", default="test")
     parser.add_argument("--labels", required=True, help="comma separated, in class-id order")
+    parser.add_argument(
+        "--old-labels",
+        help="the old model's class names, if they differ from --labels "
+        "(e.g. a model trained before a class was added)",
+    )
     parser.add_argument("--old", required=True)
     parser.add_argument("--old-backend", default="yolov4")
     parser.add_argument("--old-size", default=DEFAULT_SIZE, help="WxH input geometry")
@@ -195,6 +200,7 @@ def main():
         "--old-grey",
         help="single-channel grey specialist; makes the old arm a routed pair",
     )
+    parser.add_argument("--new-labels", help="the new model's class names, if they differ from --labels")
     parser.add_argument("--new", required=True)
     parser.add_argument("--new-backend", default="ultralytics")
     parser.add_argument("--new-size", default=DEFAULT_SIZE, help="WxH input geometry")
@@ -208,7 +214,17 @@ def main():
     )
     args = parser.parse_args()
 
-    labels = [x.strip() for x in args.labels.split(",") if x.strip()]
+    def parse_labels(text):
+        return [x.strip() for x in text.split(",") if x.strip()]
+
+    # --labels names the dataset's class ids. Each model maps its own output
+    # ids through its own list, and predictions are matched to the truth by
+    # name, so an 8-class model can be scored on a 10-class dataset.
+    labels = parse_labels(args.labels)
+    model_labels = {
+        "OLD": parse_labels(args.old_labels) if args.old_labels else labels,
+        "NEW": parse_labels(args.new_labels) if args.new_labels else labels,
+    }
     thresholds = dict((c, 0.4) for c in labels)
     for item in args.threshold:
         name, _, value = item.partition("=")
@@ -228,15 +244,15 @@ def main():
         counts = {"colour": 0, "grey": 0}
         if tag == "OLD" and args.old_grey:
             arm = routed_arm(
-                build_model(onnx, backend, labels, size, channels=3),
-                build_model(args.old_grey, backend, labels, size, channels=1),
+                build_model(onnx, backend, model_labels[tag], size, channels=3),
+                build_model(args.old_grey, backend, model_labels[tag], size, channels=1),
                 size,
                 counts,
             )
             name = "%s %s + %s routed (%dx%d) %s" % (
                 tag, onnx, args.old_grey, size[0], size[1], root)
         else:
-            arm = single_arm(build_model(onnx, backend, labels, size), size)
+            arm = single_arm(build_model(onnx, backend, model_labels[tag], size), size)
             name = "%s %s (%dx%d) %s" % (tag, onnx, size[0], size[1], root)
         evaluate(arm, name, root, labels, thresholds)
         if counts["colour"] or counts["grey"]:

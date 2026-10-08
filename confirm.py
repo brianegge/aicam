@@ -18,6 +18,17 @@ Sightings in the same frame never confirm each other: two stones in one
 picture are not movement. Sightings only from the hysteresis hold do not
 count either -- they exist only by matching an established track.
 
+People are different: they stand still, so movement proves nothing, and a
+person is never what a rock looks like. What does mistake itself for a person
+is something else passing through -- the dog walking away from the deck camera
+at night scored person 0.66 on one frame and dog 0.72 to 0.91 on the frames
+after. So [confirm] second_frame = person:0.75 holds a new person track that
+scores under 0.75 until that same track is seen again in a later frame, as a
+real detection rather than a hysteresis hold. A confident person alerts at
+once, as before; a borderline one waits at most one poll; one that was the dog
+never alerts. This is per track, not per class: a long-standing low-scoring
+"person" somewhere else must not vouch for this one.
+
 Deliberately no motion requirement upstream: aicam polls frames whether or not
 anything moved, which is what lets it see small things motion detection
 misses. This gate is the movement check, applied after the fact, at the scale
@@ -35,8 +46,10 @@ WINDOW_SECONDS = 60
 
 
 class MovementGate:
-    def __init__(self, classes, window_seconds=WINDOW_SECONDS):
+    def __init__(self, classes, window_seconds=WINDOW_SECONDS, second_frame=None):
         self.classes = set(classes)
+        # class -> score below which a new track waits for a second frame
+        self.second_frame = dict(second_frame or {})
         self.window = timedelta(seconds=window_seconds)
         # class -> [(time, camera, box)], oldest first, pruned to the window
         self.sightings = {}
@@ -70,6 +83,10 @@ class MovementGate:
                     tag_name, cam_name, len(earlier))
         return True
 
+    def needs_second_frame(self, p):
+        limit = self.second_frame.get(p["tagName"])
+        return limit is not None and (p.get("probability") or 0) < limit
+
     def is_active(self, tag_name, now):
         if not self.gated(tag_name):
             return True
@@ -94,9 +111,20 @@ def gate_for(config):
         cfg = config["confirm"]
         classes = {c.strip() for c in cfg.get("classes", "").split(",")
                    if c.strip()}
-        _gate = MovementGate(classes, cfg.getint("window", WINDOW_SECONDS))
+        _gate = MovementGate(classes, cfg.getint("window", WINDOW_SECONDS),
+                             parse_second_frame(cfg.get("second_frame", "")))
         _gate_config = config
     return _gate
+
+
+def parse_second_frame(text):
+    """"person:0.75, cat:0.7" -> {"person": 0.75, "cat": 0.7}."""
+    limits = {}
+    for item in text.split(","):
+        if item.strip():
+            tag, _, limit = item.partition(":")
+            limits[tag.strip()] = float(limit)
+    return limits
 
 
 def apply(gate, valid_predictions, new_predictions, tracked_pairs, now):
@@ -116,10 +144,21 @@ def apply(gate, valid_predictions, new_predictions, tracked_pairs, now):
     for p in valid_predictions:
         track = track_of.get(id(p))
         if id(p) in new_ids:
-            if gate.is_active(p["tagName"], now):
-                arrivals.append(p)
-            else:
+            if not gate.is_active(p["tagName"], now):
                 p["unconfirmed"] = True  # p is the new track itself
+            elif gate.needs_second_frame(p):
+                p["unconfirmed"] = True
+                p["second_frame"] = True
+            else:
+                arrivals.append(p)
+        elif track is not None and track.get("second_frame"):
+            if p.get("hold_only"):
+                p["unconfirmed"] = True
+            else:
+                del track["unconfirmed"]
+                del track["second_frame"]
+                p.pop("iou", None)
+                arrivals.append(p)
         elif track is not None and track.get("unconfirmed"):
             if gate.is_active(p["tagName"], now):
                 del track["unconfirmed"]

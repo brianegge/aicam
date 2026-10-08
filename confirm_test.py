@@ -158,3 +158,78 @@ def test_gate_reads_classes_and_window():
     assert gate.classes == {"deer", "rabbit"}
     assert gate.window == timedelta(seconds=30)
     assert confirm.gate_for(config) is gate
+
+
+# --- second_frame: borderline people ------------------------------------------
+
+def _people_gate():
+    return MovementGate({"dog"}, second_frame={"person": 0.75})
+
+
+def test_a_confident_person_alerts_at_once():
+    gate, prev = _people_gate(), {}
+    p = _pred("person", _box(0.4, 0.4), cam="deck", prob=0.91)
+    assert _frame(gate, prev, [p], _at(0)) == [p]
+
+
+def test_the_dog_called_a_person_for_one_frame_never_alerts():
+    """The deck at night: person 0.66 on one frame, then dog on every frame
+    after. Nothing of class person ever matches the held track again."""
+    gate, prev = _people_gate(), {}
+    p0 = _pred("person", _box(0.45, 0.45, 0.1, 0.2), cam="deck", prob=0.66)
+    assert _frame(gate, prev, [p0], _at(0)) == []
+    assert p0.get("unconfirmed")
+    for s, prob in ((3, 0.72), (6, 0.75), (9, 0.91)):
+        dog = _pred("dog", _box(0.45, 0.47, 0.1, 0.18), cam="deck", prob=prob)
+        assert all(a["tagName"] != "person" for a in _frame(gate, prev, [dog], _at(s)))
+    assert prev["person"][0].get("unconfirmed")
+
+
+def test_a_borderline_person_seen_again_alerts_on_the_second_frame():
+    gate, prev = _people_gate(), {}
+    p0 = _pred("person", _box(0.4, 0.4, 0.1, 0.3), cam="deck", prob=0.62)
+    assert _frame(gate, prev, [p0], _at(0)) == []
+    p1 = _pred("person", _box(0.41, 0.4, 0.1, 0.3), cam="deck", prob=0.58)
+    assert _frame(gate, prev, [p1], _at(3)) == [p1]
+    assert "iou" not in p1  # notify() would otherwise treat it as old news
+    # Announced once; the track is ordinary from here.
+    p2 = _pred("person", _box(0.41, 0.4, 0.1, 0.3), cam="deck", prob=0.70)
+    assert _frame(gate, prev, [p2], _at(6)) == []
+
+
+def test_a_hysteresis_hold_does_not_count_as_the_second_frame():
+    gate, prev = _people_gate(), {}
+    p0 = _pred("person", _box(0.4, 0.4, 0.1, 0.3), cam="deck", prob=0.60)
+    _frame(gate, prev, [p0], _at(0))
+    held = _pred("person", _box(0.4, 0.4, 0.1, 0.3), cam="deck", prob=0.30)
+    held["hold_only"] = True
+    assert _frame(gate, prev, [held], _at(3)) == []
+    assert held.get("unconfirmed")
+    p2 = _pred("person", _box(0.4, 0.4, 0.1, 0.3), cam="deck", prob=0.60)
+    assert _frame(gate, prev, [p2], _at(6)) == [p2]
+
+
+def test_another_cameras_long_standing_person_does_not_vouch_for_this_one():
+    """Per track, not per class: front entry has carried a low-scoring
+    "person" for hundreds of frames, and it must not release the deck's."""
+    gate = _people_gate()
+    front, deck = {}, {}
+    for s in range(0, 30, 3):
+        _frame(gate, front, [_pred("person", _box(0.2, 0.2), cam="front entry",
+                                   prob=0.6)], _at(s))
+    p0 = _pred("person", _box(0.45, 0.45), cam="deck", prob=0.66)
+    assert _frame(gate, deck, [p0], _at(30)) == []
+
+
+def test_classes_without_a_limit_are_untouched():
+    gate, prev = _people_gate(), {}
+    car = _pred("vehicle", _box(0.4, 0.4), prob=0.56)
+    assert _frame(gate, prev, [car], _at(0)) == [car]
+
+
+def test_gate_reads_second_frame():
+    config = configparser.ConfigParser()
+    config["confirm"] = {"classes": "dog", "second_frame": "person:0.75, cat: 0.7"}
+    confirm._gate = None
+    gate = confirm.gate_for(config)
+    assert gate.second_frame == {"person": 0.75, "cat": 0.7}

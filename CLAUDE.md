@@ -29,20 +29,28 @@ in `~/aicam` and the `git stash drop` after it discarded them -- recoverable
 only because no `git gc` had run. Both label files moved with them, since a
 model and its labels have to travel together.
 
+    ipcams-v33-labels.txt  ipcams_v33_yolo11m_608.onnx
     ipcams-labels.txt  ipcams_v32_yolo11m_608.onnx  ipcams_color_yolov4.onnx
     vehicle-labels.txt packages_vehicles_yolo11s.onnx  ipcams_grey_yolov4.onnx
     vehicles_yolov4.onnx  packages_vehicles_yolo11s_1088x608.onnx
 
 Nothing backs this directory up. The current ipcams model also exists as
-`~/train/ipcams_v32_yolo11m_608.onnx` (sha256 `ebd7ea63...`), which is what
+`~/train/ipcams_v33_yolo11m_608.onnx` (sha256 `3df6bac4...`); v32 (`ebd7ea63...`)
+is the rollback, with its own `ipcams-labels.txt`, which is what
 made the 2026-09-13 recovery verifiable.
+
+**v33 (live 2026-10-08) added bobcat and squirrel, which moved every class
+id.** A model and its labels file must be swapped together: v33 uses
+`ipcams-v33-labels.txt`, v32 `ipcams-labels.txt`. Rolling back is `onnx=` and
+`labelfile-path=` in one edit (`config.txt.bak-20261008-v33`), then a restart.
+`project.ipcams2` and `[confirm] classes` list the new classes too.
 
 Each model section picks its decoder with `backend=`, so they do not all have
 to be the same architecture:
 
 | section | file | backend |
 |---------|------|---------|
-| `[color-model]` | `ipcams_v32_yolo11m_608.onnx` | `ultralytics` |
+| `[color-model]` | `ipcams_v33_yolo11m_608.onnx` | `ultralytics` |
 | `[vehicle-model]` | `packages_vehicles_yolo11s.onnx` | `ultralytics` |
 
 There is no `[grey-model]` any more. The hue-sum routing between a colour and

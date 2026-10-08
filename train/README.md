@@ -11,7 +11,10 @@ silicon, so anything retrained here uses Ultralytics and needs
 
 ## Rebuilding the deployed ipcams animal detector
 
-`ipcams_v32_yolo11m_608.onnx`, live since 2026-09-11. Roughly 20 h on an M4.
+`ipcams_v33_yolo11m_608.onnx`, live since 2026-10-08 (v32 before it). Roughly 25 h on
+an M4. v33's scripts are `build_608_cv2.py`, `run_ipcams_v33.sh` and
+`after_ipcams_v33.sh`; the steps below describe v32's, which differ only in version
+number, class list and the ffmpeg stretch.
 
 1. **Fetch the dataset.** Roboflow `egge-public/ipcams2`, version 32, YOLOv8
    format, to `~/train/ipcams2-v32`. The API key is in `config.txt` under

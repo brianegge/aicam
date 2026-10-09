@@ -233,3 +233,72 @@ def test_gate_reads_second_frame():
     confirm._gate = None
     gate = confirm.gate_for(config)
     assert gate.second_frame == {"person": 0.75, "cat": 0.7}
+
+
+# --- release_absent: the held sighting that moved on ----------------------------
+
+def _present(prev, preds):
+    """ids of tracks this frame touched, as detect.py computes them."""
+    new = []
+    pairs, _ = track_predictions(preds, prev, new)
+    return pairs, new
+
+
+def test_the_raccoon_held_at_087_is_released_when_it_confirms_elsewhere():
+    """2026-10-09 at the peach tree: 0.87 held, an empty frame, then 0.77 on
+    fresh ground. The 0.77 alerted; the 0.87 must now be released too."""
+    gate, prev = MovementGate({"raccoon"}), {}
+    first = _pred("raccoon", _box(0.30, 0.45), cam="peach tree", prob=0.87)
+    _frame(gate, prev, [first], _at(0))
+    first["held_at"] = _at(0)
+    _frame(gate, prev, [], _at(5))
+    second = _pred("raccoon", _box(0.55, 0.50), cam="peach tree", prob=0.77)
+    pairs, new = _present(prev, [second])
+    assert confirm.apply(gate, [second], new, pairs, _at(11)) == [second]
+    present = set(id(t) for _, t in pairs) | set(id(p) for p in new)
+    released = confirm.release_absent(gate, prev, present, _at(11))
+    assert released == [first]
+    assert "unconfirmed" not in first
+    # Once only.
+    assert confirm.release_absent(gate, prev, present, _at(12)) == []
+
+
+def test_nothing_is_released_while_the_class_is_unconfirmed():
+    gate, prev = MovementGate({"raccoon"}), {}
+    first = _pred("raccoon", _box(0.30, 0.45), cam="peach tree")
+    _frame(gate, prev, [first], _at(0))
+    first["held_at"] = _at(0)
+    assert confirm.release_absent(gate, prev, set(), _at(5)) == []
+    assert first.get("unconfirmed")
+
+
+def test_a_hold_older_than_the_window_is_not_news():
+    gate, prev = MovementGate({"raccoon"}, window_seconds=60), {}
+    old = _pred("raccoon", _box(0.1, 0.1), cam="peach tree")
+    _frame(gate, prev, [old], _at(0))
+    old["held_at"] = _at(0)
+    _frame(gate, prev, [_pred("raccoon", _box(0.5, 0.5), cam="peach tree")], _at(50))
+    _frame(gate, prev, [_pred("raccoon", _box(0.8, 0.8), cam="peach tree")], _at(90))
+    assert old not in confirm.release_absent(gate, prev, set(), _at(90))
+
+
+def test_a_borderline_person_is_never_released_by_another_sighting():
+    gate = MovementGate({"dog"}, second_frame={"person": 0.75})
+    prev = {}
+    p0 = _pred("person", _box(0.45, 0.45), cam="deck", prob=0.66)
+    _frame(gate, prev, [p0], _at(0))
+    p0["held_at"] = _at(0)
+    assert confirm.release_absent(gate, prev, set(), _at(3)) == []
+    assert p0.get("unconfirmed")
+
+
+def test_an_old_hold_lets_go_of_its_frame():
+    gate, prev = MovementGate({"deer"}, window_seconds=60), {}
+    rock = _pred("deer", _box(0.4, 0.4), cam="tree line")
+    _frame(gate, prev, [rock], _at(0))
+    rock.update(held_at=_at(0), held_image="big", held_original="bigger")
+    confirm.release_absent(gate, prev, set(), _at(30))
+    assert rock.get("held_image") == "big"
+    confirm.release_absent(gate, prev, set(), _at(61))
+    assert "held_image" not in rock and "held_original" not in rock
+    assert rock.get("unconfirmed")

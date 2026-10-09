@@ -247,6 +247,71 @@ def expiry_minutes(tracked, interval):
     return min(minutes, 60)
 
 
+def where(cam, seen):
+    """ "raccoon 77%" -> "raccoon 77% near peach tree", in each camera's words."""
+    if cam.name in ["driveway", "garage"]:
+        return "%s in %s" % (seen, cam.name)
+    if cam.name == "shed":
+        return "%s in front of garage" % seen
+    if cam.name == "garage-r":
+        return "%s in front of left garage" % seen
+    if cam.name == "garage-l":
+        return "%s in front of right garage" % seen
+    return "%s near %s" % (seen, cam.name)
+
+
+def hold_new_tracks(cam, new_predictions, im_pil, image, save_dir, now):
+    """Keep the frame each newly held track was seen on, in memory and on disk.
+
+    A held sighting is often the best frame of a visit -- the raccoon held at
+    0.87 alerted at 0.77 -- and it is needed again if the track is released
+    without being seen (confirm.release_absent). On disk it is training
+    material like the -prior and -departed frames: a held "person" that turns
+    out to be the dog is exactly what the detector should learn from.
+    """
+    for p in new_predictions:
+        if not p.get("unconfirmed") or "held_image" in p:
+            continue
+        p["held_image"] = im_pil.copy()
+        p["held_original"] = image
+        p["held_at"] = now
+        if cam.is_file:
+            continue
+        basename = os.path.join(
+            save_dir,
+            datetime.now().strftime("%H%M%S")
+            + "-" + cam.name.replace(" ", "_")
+            + "-" + p["tagName"] + "-held",
+        )
+        try:
+            if isinstance(image, Image.Image):
+                image.save(basename + ".jpg")
+            else:
+                cv2.imwrite(basename + ".jpg", image)
+        except Exception:
+            logger.exception("could not save held frame for %s", cam.name)
+
+
+def announce_held(cam, track, config, ha, model_name):
+    """Alert for a held track released without being seen again.
+
+    Sent with the frame it was held on, before this frame's own alert, so the
+    two arrive in the order they were seen. Returns the time spent notifying.
+    """
+    seen = label_with_confidence({track["tagName"]}, [track])
+    ago = (datetime.now() - track["start_time"]).total_seconds()
+    message = "%s, %.0fs earlier" % (where(cam, seen), ago)
+    logger.info("%s confirmed after it moved on; announcing the held sighting: %s",
+                cam.name, message)
+    start = timer()
+    try:
+        notify(cam, message, track.pop("held_image"), [track], config, ha,
+               model_name=model_name, original_image=track.pop("held_original", None))
+    except Exception:
+        logger.exception("announcing held %s on %s failed", track["tagName"], cam.name)
+    return timer() - start
+
+
 def track_predictions(valid_predictions, prev_predictions, new_predictions):
     """Match this frame's predictions to the tracks carried from earlier ones.
 
@@ -559,6 +624,11 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         arrivals = confirm.apply(
             gate, valid_predictions, new_predictions, tracked_pairs, hold_now)
         alert_predictions = [p for p in valid_predictions if not p.get("unconfirmed")]
+        hold_new_tracks(cam, new_predictions, im_pil, image, save_dir, hold_now)
+        present = set(id(prev) for _, prev in tracked_pairs)
+        present.update(id(p) for p in new_predictions)
+        for t in confirm.release_absent(gate, cam.prev_predictions, present, hold_now):
+            notify_time += announce_held(cam, t, config, ha, model_name)
     else:
         arrivals = new_predictions
         alert_predictions = valid_predictions
@@ -623,16 +693,7 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         # Say when the second opinion could not be had. A gate that fails open
         # silently reads exactly like a gate that passed the detection.
         unverified = verify.unverified_note(alert_predictions)
-        if cam.name in ["driveway", "garage"]:
-            message = "%s in %s" % (seen, cam.name) + unverified
-        elif cam.name == "shed":
-            message = "%s in front of garage" % seen + unverified
-        elif cam.name == "garage-r":
-            message = "%s in front of left garage" % seen + unverified
-        elif cam.name == "garage-l":
-            message = "%s in front of right garage" % seen + unverified
-        else:
-            message = "%s near %s" % (seen, cam.name) + unverified
+        message = where(cam, seen) + unverified
         if cam.age > 2 or "once" in config["detector"]:
             notify_start = timer()
             priority = notify(cam, message, im_pil, alert_predictions, config, ha, model_name=model_name, original_image=image)

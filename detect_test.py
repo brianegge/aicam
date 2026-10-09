@@ -474,3 +474,42 @@ def test_publish_vehicles_is_silent_for_a_camera_without_vehicle_checks():
     cam = _mock.Mock(vehicle_check=False, frigate_name="play")
     _detect.publish_vehicles(cam, [])
     cam.publish.assert_not_called()
+
+
+# --- held sightings -------------------------------------------------------------
+
+class _HeldCam:
+    name = "peach tree"
+    is_file = False
+
+
+def test_where_keeps_each_cameras_wording():
+    cam = _HeldCam()
+    assert detect.where(cam, "raccoon 87%") == "raccoon 87% near peach tree"
+    cam.name = "shed"
+    assert detect.where(cam, "dog 90%") == "dog 90% in front of garage"
+
+
+def test_a_held_track_keeps_its_frame_and_saves_it(tmp_path):
+    from PIL import Image
+    frame = Image.new("RGB", (64, 36))
+    held = {"tagName": "raccoon", "unconfirmed": True}
+    plain = {"tagName": "person"}
+    now = datetime(2026, 10, 9, 2, 26, 25)
+    detect.hold_new_tracks(_HeldCam(), [held, plain], frame, frame, str(tmp_path), now)
+    assert held["held_at"] == now and held["held_image"] is not frame
+    assert "held_image" not in plain
+    saved = list(tmp_path.glob("*-peach_tree-raccoon-held.jpg"))
+    assert len(saved) == 1
+
+
+def test_announcing_a_held_track_sends_its_own_frame(monkeypatch):
+    sent = []
+    monkeypatch.setattr(detect, "notify",
+                        lambda cam, msg, image, preds, *a, **k: sent.append((msg, image)))
+    track = {"tagName": "raccoon", "probability": 0.87,
+             "start_time": datetime.now() - timedelta(seconds=11),
+             "held_image": "frame-0.87", "held_original": "raw"}
+    detect.announce_held(_HeldCam(), track, None, None, "grey")
+    assert sent == [("raccoon 87% near peach tree, 11s earlier", "frame-0.87")]
+    assert "held_image" not in track

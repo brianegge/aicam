@@ -117,6 +117,43 @@ def gate_for(config):
     return _gate
 
 
+def _drop_held_frame(track):
+    """Seen again, so this frame's own picture goes out; free the held one."""
+    track.pop("held_image", None)
+    track.pop("held_original", None)
+
+
+def release_absent(gate, tracks, present_ids, now):
+    """Held tracks of a now-active class that this frame did not see again.
+
+    apply() only releases a held track when the current frame matches it, and
+    an animal that moved -- the very thing that confirmed its class -- has
+    left its old box. On 2026-10-09 a raccoon scored 0.87 at the peach tree,
+    was held, and confirmed itself 0.77 on fresh ground two polls later; the
+    0.77 frame alerted and the 0.87 one, the better picture, was never sent.
+
+    Returns those tracks, no longer unconfirmed, for the caller to announce
+    with the frame they were held on. Only tracks held within the window: an
+    old hold is not news, and its frame is freed here. second_frame holds are never released this way --
+    a borderline person is confirmed only by being seen again itself.
+    """
+    released = []
+    for tag_name, tag_tracks in tracks.items():
+        active = gate.gated(tag_name) and gate.is_active(tag_name, now)
+        for t in tag_tracks:
+            if not t.get("unconfirmed"):
+                continue
+            if now - t.get("held_at", now) >= gate.window:
+                # Too old to announce, so stop holding a full-size frame for
+                # it -- a rock can stay held for hours.
+                _drop_held_frame(t)
+            elif (active and not t.get("second_frame")
+                    and id(t) not in present_ids):
+                del t["unconfirmed"]
+                released.append(t)
+    return released
+
+
 def parse_second_frame(text):
     """"person:0.75, cat:0.7" -> {"person": 0.75, "cat": 0.7}."""
     limits = {}
@@ -157,11 +194,13 @@ def apply(gate, valid_predictions, new_predictions, tracked_pairs, now):
             else:
                 del track["unconfirmed"]
                 del track["second_frame"]
+                _drop_held_frame(track)
                 p.pop("iou", None)
                 arrivals.append(p)
         elif track is not None and track.get("unconfirmed"):
             if gate.is_active(p["tagName"], now):
                 del track["unconfirmed"]
+                _drop_held_frame(track)
                 # notify() treats a matched track as already announced.
                 p.pop("iou", None)
                 arrivals.append(p)

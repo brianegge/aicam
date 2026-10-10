@@ -305,8 +305,13 @@ def announce_held(cam, track, config, ha, model_name):
                 cam.name, message)
     start = timer()
     try:
-        notify(cam, message, track.pop("held_image"), [track], config, ha,
-               model_name=model_name, original_image=track.pop("held_original", None))
+        priority = notify(cam, message, track.pop("held_image"), [track], config, ha,
+                          model_name=model_name,
+                          original_image=track.pop("held_original", None))
+        # Said either way: on 2026-10-10 a held cat was "announced" here and
+        # nothing showed whether notify() then sent it.
+        logger.info("%s: held sighting went to notify at p%s (%s)", cam.name,
+                    priority, track.get("priority_type"))
     except Exception:
         logger.exception("announcing held %s on %s failed", track["tagName"], cam.name)
     return timer() - start

@@ -325,3 +325,34 @@ def test_a_person_in_the_garage_is_not_posted_at_an_invalid_priority(tmp_path):
               "boundingBox": {"left": 0.3, "top": 0.2, "width": 0.1, "height": 0.4},
               "center": {"x": 0.35, "y": 0.4}}
     assert _review_post([person], "person in garage", tmp_path) is None
+
+
+class TestCatInGarage:
+    """The family cat uses the garage. At home that is not news; away or at
+    night it is, at the cat priority the config gives that mode. On
+    2026-10-10 the house was away and she still went out at -2."""
+
+    def _run(self, mode, tmp_path):
+        import configparser
+        from PIL import Image
+        ha = _ha()
+        ha.mode.return_value = mode
+        cfg = _config(tmp_path)
+        cfg["priority"]["cat"] = "0"
+        cfg["priority-night"] = {"cat": "1"}
+        cam = mock.Mock()
+        cam.name = "garage"
+        cam.road_line = None
+        cat = {"tagName": "cat", "probability": 0.69, "camName": "garage",
+               "boundingBox": {"left": 0.15, "top": 0.85, "width": 0.1, "height": 0.08},
+               "center": {"x": 0.2, "y": 0.89}}
+        return notify.notify(cam, "", Image.new("RGB", (640, 360)), [cat], cfg, ha)
+
+    def test_at_home_she_stays_quiet(self, tmp_path):
+        assert self._run("home", tmp_path) == -2
+
+    def test_away_she_alerts_at_the_cat_priority(self, tmp_path):
+        assert self._run("away", tmp_path) == 0
+
+    def test_at_night_she_alerts_at_the_night_cat_priority(self, tmp_path):
+        assert self._run("night", tmp_path) == 1

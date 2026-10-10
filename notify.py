@@ -258,7 +258,12 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
             i = -3
             i_type = "vehicle rule"
             # cars should not be possible here, unless in road
-        elif tagName == "cat" and cam.name == "garage":
+        elif tagName == "cat" and cam.name == "garage" and mode == "home":
+            # The family cat comes and goes through the garage, which is
+            # news nobody at home needs. Away or at night it is wanted, at the
+            # [priority-<mode>] or [priority] cat level -- this rule used to
+            # run in every mode and sent her at -2 while the house was empty
+            # (2026-10-10 00:06, away).
             i = -2
             i_type = "cat in garage rule"
         elif tagName == "person" and cam.name == "garage":

@@ -228,3 +228,104 @@ def test_face_quality_measures_the_crop():
     assert fr.face_quality(white)[0] == 1.0
     assert fr.face_quality(flat)[1] == 0.0
     assert fr.face_quality(flat)[2] is None        # no detector configured
+
+
+# --- mosaic, ranking, size, people (2026-10-10) ---------------------------------
+
+K0 = "1791610887.5-qmhvye-1791610891.5-Kyle-0.85.webp"      # 64x86, sharp
+K1 = "1791610887.5-qmhvye-1791610892.4-unknown-0.36.webp"   # 83x92, soft
+K2 = "1791610887.5-qmhvye-1791610893.1-unknown-0.00.webp"   # 89x101, blurred
+
+
+def _attachment(push_files):
+    return cv2.imdecode(np.frombuffer(push_files, np.uint8), cv2.IMREAD_COLOR)
+
+
+class FilesHTTP(FakeHTTP):
+    """FakeHTTP that also keeps the attachments."""
+    def __init__(self, *a, **k):
+        super(FilesHTTP, self).__init__(*a, **k)
+        self.attachments = []
+
+    def post(self, url, data=None, files=None, json=None, timeout=None):
+        if "pushover" in url and files:
+            self.attachments.append(files["attachment"][1])
+        return super(FilesHTTP, self).post(url, data=data, files=files, json=json,
+                                           timeout=timeout)
+
+
+def _visit(tmp_path, images, **opts):
+    http = FilesHTTP([], images)
+    rev = make(tmp_path, http, **opts)
+    rev.poll_once()
+    http.train += list(images)
+    return rev, http
+
+
+def test_the_sharp_named_face_trains_not_the_bigger_soft_one(tmp_path):
+    """Kyle at 01:41 on 2026-10-10: the notification showed the tilted, soft
+    83x92 crop and left out the sharp 64x86 one Frigate had at Kyle 0.85."""
+    rev, http = _visit(tmp_path, {K0: webp(64, 86), K1: webp(83, 92, blur=1.2),
+                                  K2: webp(89, 101, blur=3)})
+    assert rev.poll_once() == 1
+    q = parse_qs(urlparse(http.pushes[0]["url"]).query)
+    assert q["file"] == [K0]
+    assert "best of 3" in http.pushes[0]["message"]
+
+
+def test_a_64x86_face_is_big_enough(tmp_path):
+    """Frigate's floor is an area (4800); a 70 px minimum side refused it."""
+    rev, http = _visit(tmp_path, {K0: webp(64, 86)})
+    assert rev.poll_once() == 1
+
+
+def test_several_attempts_arrive_as_one_mosaic(tmp_path):
+    rev, http = _visit(tmp_path, {K0: webp(64, 86), K1: webp(83, 92, blur=1.2),
+                                  K2: webp(89, 101, blur=3)})
+    rev.poll_once()
+    pic = _attachment(http.attachments[0])
+    assert pic.shape[:2] == (fr.TILE, 3 * fr.TILE)
+
+
+def test_one_attempt_is_sent_as_the_face_itself(tmp_path):
+    rev, http = _visit(tmp_path, {K0: webp(64, 86)})
+    rev.poll_once()
+    pic = _attachment(http.attachments[0])
+    assert pic.shape[0] != fr.TILE        # the upscaled face, not a tile
+    assert "best of" not in http.pushes[0]["message"]
+
+
+def test_the_mosaic_is_capped(tmp_path):
+    files = {"1790000000.1-many01-17900000%02d.5-unknown-0.10.webp" % i: webp(100 + i, 100)
+             for i in range(9)}
+    rev, http = _visit(tmp_path, files, **{"max-tiles": "4"})
+    rev.poll_once()
+    pic = _attachment(http.attachments[0])
+    assert pic.shape[:2] == (2 * fr.TILE, 3 * fr.TILE)   # 4 tiles, 3 a row
+    assert "best of 4" in http.pushes[0]["message"]
+
+
+def test_an_event_naming_two_people_is_split():
+    """Josiana's helper walks in with her. Frigate tracks them as two events;
+    should the tracker swap them inside one, each still gets their own ask."""
+    atts = [fr.parse_train_name(f) for f in (
+        "1790000000.1-two001-1790000001.5-Josiana-0.92.webp",
+        "1790000000.1-two001-1790000002.5-Lee-0.88.webp",
+        "1790000000.1-two001-1790000003.5-unknown-0.20.webp")]
+    groups = fr.split_people(atts)
+    assert sorted(g[0]["guess"] for g in groups) == ["Josiana", "Lee"]
+    assert all(len(g) == 1 for g in groups)
+
+
+def test_one_named_person_and_unknowns_stay_together():
+    atts = [fr.parse_train_name(f) for f in (K0, K1, K2)]
+    assert fr.split_people(atts) == [atts]
+
+
+def test_two_people_in_one_event_get_two_notifications(tmp_path):
+    a = "1790000000.1-two002-1790000001.5-Chloe-0.92.webp"
+    b = "1790000000.1-two002-1790000002.5-Lee-0.90.webp"
+    rev, http = _visit(tmp_path, {a: webp(100, 100), b: webp(100, 100)})
+    rev.poll_once()
+    sent = sorted(parse_qs(urlparse(p["url"]).query)["file"][0] for p in http.pushes)
+    assert sent == [a, b]

@@ -6,9 +6,10 @@ is unusable on the phone -- the page goes white after a second -- so this does
 the same job through the channel aicam alerts already use:
 
   poll    `/api/faces` on the Frigate host for Train images it has not seen
-  send    one Pushover per sighting (the largest attempt of a Frigate event
-          that is fit to name -- see face_quality), picture attached, linking
-          to face-review.html on Home Assistant
+  send    one Pushover per sighting -- a Frigate person event, split further
+          if its attempts confidently name two different people -- with a
+          mosaic of every attempt, the one that a tap will train marked 1
+          (see best_attempt), linking to face-review.html on Home Assistant
   tap     the page calls the existing aicam_roboflow_review webhook with
           model=face, file=<train file>, cam=<name>; Home Assistant forwards
           that to the review server here, which calls classify() below
@@ -58,9 +59,13 @@ class FaceReviewConfig(object):
         self.frigate_url = section.get("frigate-url", "http://192.168.254.31:5000").rstrip("/")
         self.page_url = section["page-url"]
         self.poll_seconds = section.getint("poll-seconds", 60)
-        # Smaller than this is not worth a person's time: Frigate's own
-        # min_area is 4800 (~70x70), and nothing below it can be recognised.
-        self.min_side = section.getint("min-side", 70)
+        # Frigate's own floor (face_recognition.min_area). This was a 70 px
+        # minimum *side*, which threw away a sharp 64x86 crop Frigate had
+        # already scored Kyle 0.85 and sent a tilted, soft 83x92 one of the
+        # same visit instead (2026-10-10 01:41).
+        self.min_area = section.getint("min-area", 4800)
+        # More would make a lock-screen picture of postage stamps.
+        self.max_tiles = section.getint("max-tiles", 6)
         # A face nobody could name is not worth asking about, and naming one
         # anyway poisons the library: Frigate averages each person's images,
         # so washed-out and side-on crops make that person's average a
@@ -145,6 +150,82 @@ def face_quality(img, detector_path=""):
             if eye_width > 1:
                 yaw = float(abs(nose[0] - (right_eye[0] + left_eye[0]) / 2) / eye_width)
     return blown, sharpness, yaw
+
+
+# Sharpness compared at one size: the Laplacian variance of a raw crop grows
+# as the crop shrinks, so ranking raw crops by it prefers the smallest.
+RANK_SIDE = 112
+# A named guess at least this good is Frigate saying the face is readable.
+NAMED_SCORE = 0.8
+
+
+def rank_sharpness(img):
+    grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    small = min(grey.shape[:2]) > RANK_SIDE
+    grey = cv2.resize(grey, (RANK_SIDE, RANK_SIDE),
+                      interpolation=cv2.INTER_AREA if small else cv2.INTER_CUBIC)
+    return float(cv2.Laplacian(grey, cv2.CV_64F).var())
+
+
+def best_attempt(fit):
+    """The attempt a tap will train, from [(attempt, img)] that are fit.
+
+    Frigate naming a face confidently is the strongest sign it is readable,
+    so that comes first; then sharpness at a common size. Largest-first chose
+    the worst of Kyle's four attempts on 2026-10-10.
+    """
+    def key(pair):
+        a, img = pair
+        named = a["score"] if a["guess"] != "unknown" and a["score"] >= NAMED_SCORE else 0.0
+        return (named, rank_sharpness(img))
+    return max(fit, key=key)
+
+
+def split_people(attempts):
+    """One group per person. A Frigate event is one tracked person, and two
+    people arriving together are two events (Josiana and her helper,
+    2026-10-09 07:57). Should the tracker swap people mid-event, attempts that
+    confidently name two different people are split by name, and the
+    unnamed ones -- which could be either -- are left out."""
+    named = {}
+    for a in attempts:
+        if a["guess"] != "unknown" and a["score"] >= NAMED_SCORE:
+            named.setdefault(a["guess"], []).append(a)
+    if len(named) < 2:
+        return [attempts]
+    return list(named.values())
+
+
+TILE = 240
+
+
+def mosaic(tiles):
+    """[(img, label, is_best, dim)] -> one image, best first, numbered."""
+    cells = []
+    for img, label, is_best, dim in tiles:
+        h, w = img.shape[:2]
+        scale = float(TILE) / max(h, w)
+        cell = np.full((TILE, TILE, 3), 24, np.uint8)
+        im = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))),
+                        interpolation=cv2.INTER_CUBIC)
+        y, x = (TILE - im.shape[0]) // 2, (TILE - im.shape[1]) // 2
+        if dim:
+            im = (im * 0.4).astype(np.uint8)
+        cell[y:y + im.shape[0], x:x + im.shape[1]] = im
+        colour = (60, 200, 60) if is_best else (200, 200, 200)
+        if is_best:
+            cv2.rectangle(cell, (1, 1), (TILE - 2, TILE - 2), colour, 4)
+        cv2.rectangle(cell, (0, TILE - 26), (TILE, TILE), (0, 0, 0), -1)
+        cv2.putText(cell, label, (6, TILE - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    colour, 1, cv2.LINE_AA)
+        cells.append(cell)
+    cols = min(3, len(cells))
+    rows = (len(cells) + cols - 1) // cols
+    out = np.full((rows * TILE, cols * TILE, 3), 24, np.uint8)
+    for i, cell in enumerate(cells):
+        r, c = divmod(i, cols)
+        out[r * TILE:(r + 1) * TILE, c * TILE:(c + 1) * TILE] = cell
+    return out
 
 
 def page_link(page_url, filename, names):
@@ -237,7 +318,7 @@ class FaceReview(object):
 
     def _unfit(self, img):
         """Why this crop is not worth asking about, or None if it is."""
-        if min(img.shape[:2]) < self.cfg.min_side:
+        if img.shape[0] * img.shape[1] < self.cfg.min_area:
             return "too small"
         blown, sharpness, yaw = face_quality(img, self.cfg.face_detector)
         if blown > self.cfg.max_blown:
@@ -249,39 +330,65 @@ class FaceReview(object):
         return None
 
     def _review_event(self, event_id, attempts, names):
-        # The largest attempt that is fit to name. Largest alone sent the
-        # worst of three at 21:40 on 2026-10-03: the biggest crop was also the
-        # most blown out.
-        best, best_img, reasons, readable = None, None, [], 0
-        for a in attempts:
+        loaded = []
+        for a in sorted(attempts, key=lambda a: a["ts"]):
             try:
                 img = self.train_image(a["file"])
             except requests.RequestException:
                 continue
-            if img is None:
-                continue
-            readable += 1
-            why = self._unfit(img)
-            if why:
-                reasons.append(why)
-                continue
-            if best_img is None or img.shape[0] * img.shape[1] > best_img.shape[0] * best_img.shape[1]:
-                best, best_img = a, img
-        if not readable:
+            if img is not None:
+                loaded.append((a, img))
+        if not loaded:
             return "unreadable"
-        if best is None:
-            if all(r == "too small" for r in reasons):
-                return "too small"
-            logger.info("face review: not asking about %s, no attempt fit to name: %s",
-                        event_id, ", ".join(reasons))
-            return "unfit"
-        if not self.cfg.pushover:
-            logger.info("face review: no Pushover configured, not sending %s", best["file"])
-            return "no pushover"
-        self.send(best, best_img, self.camera_of(event_id), names)
-        return "sent"
+        camera = None
+        statuses = []
+        for group in split_people([a for a, _ in loaded]):
+            files = set(a["file"] for a in group)
+            pairs = [(a, img) for a, img in loaded if a["file"] in files]
+            judged = [(a, img, self._unfit(img)) for a, img in pairs]
+            fit = [(a, img) for a, img, why in judged if not why]
+            if not fit:
+                reasons = [why for _, _, why in judged]
+                if all(r == "too small" for r in reasons):
+                    statuses.append("too small")
+                else:
+                    logger.info("face review: not asking about %s, no attempt fit to "
+                                "name: %s", event_id, ", ".join(reasons))
+                    statuses.append("unfit")
+                continue
+            best, best_img = best_attempt(fit)
+            if not self.cfg.pushover:
+                logger.info("face review: no Pushover configured, not sending %s",
+                            best["file"])
+                statuses.append("no pushover")
+                continue
+            if camera is None:
+                camera = self.camera_of(event_id) or ""
+            self.send(best, self._picture(best, judged), camera or None, names,
+                      shown=min(len(judged), self.cfg.max_tiles))
+            statuses.append("sent")
+        for status in ("sent", "unfit", "no pushover", "too small"):
+            if status in statuses:
+                return status
+        return "unfit"
 
-    def send(self, attempt, img, camera, names):
+    def _picture(self, best, judged):
+        """The notification picture: one face, or every attempt with the one
+        a tap trains marked 1 and the unusable ones dimmed with the reason."""
+        if len(judged) == 1:
+            return judged[0][1]
+        ordered = [j for j in judged if j[0] is best]
+        ordered += [j for j in judged if j[0] is not best][:self.cfg.max_tiles - 1]
+        tiles = []
+        for n, (a, img, why) in enumerate(ordered, 1):
+            label = "%d  %s" % (n, why or (
+                "%s %.0f%%" % (a["guess"], a["score"] * 100)
+                if a["guess"] != "unknown" else "fit"))
+            tiles.append((img, label + ("  (trains)" if a is best else ""),
+                          a is best, bool(why)))
+        return mosaic(tiles)
+
+    def send(self, attempt, img, camera, names, shown=1):
         # Train crops are small; scale up so the lock screen shows a face, not
         # a thumbnail of one.
         side = max(img.shape[:2])
@@ -296,6 +403,8 @@ class FaceReview(object):
             message = "Looks like %s (%.0f%%)" % (guess, attempt["score"] * 100)
         if camera:
             message += " at %s" % camera.replace("_", " ")
+        if shown > 1:
+            message += " -- best of %d, marked 1" % shown
         token, user = self.cfg.pushover
         data = {
             "token": token, "user": user,

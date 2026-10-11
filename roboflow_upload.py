@@ -782,12 +782,13 @@ def tap_message(code, result, filename):
     return "Flagged for review, uploaded to %s" % where
 
 
-def _do_face(filename, name):
-    """A tap from face-review.html: model=face, cam=<the name chosen>."""
+def _do_face(filename, name, train=True):
+    """A tap from face-review.html: model=face, cam=<the name chosen>,
+    tags=notrain when the picture was too soft to train on."""
     if _face_review is None:
         code, result = 404, {"error": "face review is not configured here"}
     else:
-        code, result = _face_review.classify(filename, name)
+        code, result = _face_review.classify(filename, name, trainable=train)
     result["face"] = True
     return code, result
 
@@ -804,7 +805,7 @@ def _do_remini(filename, answer):
 
 def _route_tap(filename, model, cam, detection_tags, verdict):
     if model == "face":
-        return _do_face(filename, cam)
+        return _do_face(filename, cam, train="notrain" not in (detection_tags or ()))
     if model == "remini":
         return _do_remini(filename, cam)
     return _do_upload(filename, model, cam, detection_tags, verdict)

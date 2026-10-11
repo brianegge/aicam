@@ -551,3 +551,18 @@ class TestChangedVerdict:
         roboflow_upload._do_upload("abc123.jpg|correct", "", "", set())
         _, result = roboflow_upload._do_upload("abc123.jpg", "", "", set())
         assert result["status"] == "already"
+
+
+def test_a_notrain_face_tap_is_passed_through(monkeypatch):
+    seen = {}
+
+    class Rev(object):
+        def classify(self, filename, name, trainable=True):
+            seen.update(filename=filename, name=name, train=trainable)
+            return 200, {"message": "ok"}
+
+    monkeypatch.setattr(roboflow_upload, "_face_review", Rev())
+    roboflow_upload._route_tap("f.webp", "face", "Kyle", {"notrain"}, None)
+    assert seen == {"filename": "f.webp", "name": "Kyle", "train": False}
+    roboflow_upload._route_tap("f.webp", "face", "Kyle", set(), None)
+    assert seen["train"] is True

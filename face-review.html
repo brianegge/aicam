@@ -69,7 +69,14 @@
  var q = new URLSearchParams(location.search);
  var file = q.get("file") || "";
  var names = (q.get("names") || "").split(",").filter(Boolean);
+ var notrain = q.get("notrain") === "1";
  document.getElementById("which").textContent = file || "no face given";
+ if (notrain) {
+   var n = document.createElement("p"); n.className = "note";
+   n.textContent = "This picture is not sharp enough to train on. Say who it was; "
+     + "it will be removed, not added to anyone.";
+   document.getElementById("which").after(n);
+ }
 
  var grid = document.getElementById("names");
  names.forEach(function (n) {
@@ -91,7 +98,8 @@
    all(true);
    say("Sending…");
    fetch(location.origin + "/api/webhook/aicam_roboflow_review?model=face"
-         + "&file=" + encodeURIComponent(file) + "&cam=" + encodeURIComponent(name))
+         + "&file=" + encodeURIComponent(file) + "&cam=" + encodeURIComponent(name)
+         + (notrain ? "&tags=notrain" : ""))
      .then(function (r) {
        say(r.ok ? "Sent. The confirmation will arrive as a notification."
                 : "Home Assistant answered " + r.status + ".");

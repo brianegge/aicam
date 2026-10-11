@@ -310,7 +310,7 @@ def test_an_event_naming_two_people_is_split():
     should the tracker swap them inside one, each still gets their own ask."""
     atts = [fr.parse_train_name(f) for f in (
         "1790000000.1-two001-1790000001.5-Josiana-0.92.webp",
-        "1790000000.1-two001-1790000002.5-Lee-0.88.webp",
+        "1790000000.1-two001-1790000002.5-Lee-0.93.webp",
         "1790000000.1-two001-1790000003.5-unknown-0.20.webp")]
     groups = fr.split_people(atts)
     assert sorted(g[0]["guess"] for g in groups) == ["Josiana", "Lee"]
@@ -329,3 +329,37 @@ def test_two_people_in_one_event_get_two_notifications(tmp_path):
     rev.poll_once()
     sent = sorted(parse_qs(urlparse(p["url"]).query)["file"][0] for p in http.pushes)
     assert sent == [a, b]
+
+
+# --- a guess must be Frigate's own name, and a soft face is never trained ------
+
+def test_a_guess_below_frigates_threshold_does_not_pick_the_face(tmp_path):
+    """15:25 on 2026-10-10: a wrong 'Creenie 0.81' outranked sharper attempts."""
+    soft = "1790000000.1-g00001-1790000001.5-Creenie-0.81.webp"
+    sharp = "1790000000.1-g00001-1790000002.5-unknown-0.30.webp"
+    rev, http = _visit(tmp_path, {soft: webp(100, 100, blur=0.8), sharp: webp(100, 100)})
+    rev.poll_once()
+    assert parse_qs(urlparse(http.pushes[0]["url"]).query)["file"] == [sharp]
+
+
+def test_a_face_that_barely_passes_is_asked_about_but_not_trained(tmp_path):
+    rev, http = _visit(tmp_path, {B1: webp(140, 160, blur=1.3)},
+                       **{"min-sharpness": "20", "train-min-sharpness": "5000"})
+    assert rev.poll_once() == 1
+    push = http.pushes[0]
+    assert parse_qs(urlparse(push["url"]).query)["notrain"] == ["1"]
+    assert "not sharp enough to train" in push["message"]
+
+
+def test_a_sharp_face_is_trainable(tmp_path):
+    rev, http = _visit(tmp_path, {B1: webp(140, 160)})
+    rev.poll_once()
+    assert "notrain" not in parse_qs(urlparse(http.pushes[0]["url"]).query)
+
+
+def test_naming_a_no_train_face_removes_it_without_training(tmp_path):
+    http = FakeHTTP([B1], {B1: webp(100, 100)})
+    rev = make(tmp_path, http)
+    code, result = rev.classify(B1, "Kyle", trainable=False)
+    assert code == 200 and "not sharp enough" in result["message"]
+    assert http.posts == [(rev.cfg.frigate_url + "/api/faces/train/delete", {"ids": [B1]})]

@@ -66,6 +66,11 @@ class FaceReviewConfig(object):
         self.min_area = section.getint("min-area", 4800)
         # More would make a lock-screen picture of postage stamps.
         self.max_tiles = section.getint("max-tiles", 6)
+        # Good enough to ask about is not good enough to train on. The 15:25
+        # face passed min-sharpness at 82; Kyle's sharp crop read 221-252.
+        # Below this the sighting is still sent, but nothing is marked to
+        # train and any name tapped removes it without training.
+        self.train_min_sharpness = section.getfloat("train-min-sharpness", 120.0)
         # A face nobody could name is not worth asking about, and naming one
         # anyway poisons the library: Frigate averages each person's images,
         # so washed-out and side-on crops make that person's average a
@@ -155,8 +160,11 @@ def face_quality(img, detector_path=""):
 # Sharpness compared at one size: the Laplacian variance of a raw crop grows
 # as the crop shrinks, so ranking raw crops by it prefers the smallest.
 RANK_SIDE = 112
-# A named guess at least this good is Frigate saying the face is readable.
-NAMED_SCORE = 0.8
+# A named guess counts only at Frigate's own naming threshold. 0.8 let a
+# wrong 0.81 "Creenie" -- pulled there by her blurry camera crops -- mark a
+# downcast, eyes-closed face of her daughter as the one to train
+# (2026-10-10 15:25).
+NAMED_SCORE = 0.9
 
 
 def rank_sharpness(img):
@@ -228,15 +236,18 @@ def mosaic(tiles):
     return out
 
 
-def page_link(page_url, filename, names):
+def page_link(page_url, filename, names, train=True):
     """The review page link, carrying the names to offer as buttons.
 
     Names are dropped from the end if the link would pass Pushover's 512; the
     page always offers a free-text box as well, so nobody becomes unnameable.
+    `train=False` tells the page that any name only removes the face.
     """
     names = sorted(names, key=str.lower)
+    extra = {} if train else {"notrain": "1"}
     while True:
-        query = urlencode({"file": filename, "names": ",".join(names)}, quote_via=quote)
+        query = urlencode(dict({"file": filename, "names": ",".join(names)}, **extra),
+                          quote_via=quote)
         url = page_url + ("&" if "?" in page_url else "?") + query
         if len(url) <= URL_LIMIT or not names:
             return url
@@ -364,15 +375,17 @@ class FaceReview(object):
                 continue
             if camera is None:
                 camera = self.camera_of(event_id) or ""
-            self.send(best, self._picture(best, judged), camera or None, names,
-                      shown=min(len(judged), self.cfg.max_tiles))
+            trainable = face_quality(best_img)[1] >= self.cfg.train_min_sharpness
+            self.send(best, self._picture(best, judged, trainable), camera or None,
+                      names, shown=min(len(judged), self.cfg.max_tiles),
+                      trainable=trainable)
             statuses.append("sent")
         for status in ("sent", "unfit", "no pushover", "too small"):
             if status in statuses:
                 return status
         return "unfit"
 
-    def _picture(self, best, judged):
+    def _picture(self, best, judged, trainable=True):
         """The notification picture: one face, or every attempt with the one
         a tap trains marked 1 and the unusable ones dimmed with the reason."""
         if len(judged) == 1:
@@ -384,11 +397,11 @@ class FaceReview(object):
             label = "%d  %s" % (n, why or (
                 "%s %.0f%%" % (a["guess"], a["score"] * 100)
                 if a["guess"] != "unknown" else "fit"))
-            tiles.append((img, label + ("  (trains)" if a is best else ""),
-                          a is best, bool(why)))
+            mark = ("  (trains)" if trainable else "  (no training)") if a is best else ""
+            tiles.append((img, label + mark, a is best and trainable, bool(why)))
         return mosaic(tiles)
 
-    def send(self, attempt, img, camera, names, shown=1):
+    def send(self, attempt, img, camera, names, shown=1, trainable=True):
         # Train crops are small; scale up so the lock screen shows a face, not
         # a thumbnail of one.
         side = max(img.shape[:2])
@@ -403,7 +416,9 @@ class FaceReview(object):
             message = "Looks like %s (%.0f%%)" % (guess, attempt["score"] * 100)
         if camera:
             message += " at %s" % camera.replace("_", " ")
-        if shown > 1:
+        if not trainable:
+            message += " -- not sharp enough to train; naming only removes it"
+        elif shown > 1:
             message += " -- best of %d, marked 1" % shown
         token, user = self.cfg.pushover
         data = {
@@ -413,7 +428,7 @@ class FaceReview(object):
             "timestamp": int(attempt["ts"]),
             "priority": self.cfg.priority,
             "sound": self.cfg.sound,
-            "url": page_link(self.cfg.page_url, attempt["file"], names),
+            "url": page_link(self.cfg.page_url, attempt["file"], names, train=trainable),
             "url_title": "Name this face",
         }
         r = self.http.post("https://api.pushover.net/1/messages.json", data=data,
@@ -431,8 +446,13 @@ class FaceReview(object):
             logger.info("face review: sent %s (%s)", attempt["file"], message)
 
     # ------------------------------------------------------------------ tap
-    def classify(self, filename, name):
-        """Act on a tap. Returns (http_code, result) like roboflow_upload._do_upload."""
+    def classify(self, filename, name, trainable=True):
+        """Act on a tap. Returns (http_code, result) like roboflow_upload._do_upload.
+
+        `trainable=False` (the notification said the picture was not good enough)
+        removes the face whatever name was tapped, so a soft crop never
+        reaches a person's set.
+        """
         filename = os.path.basename(filename or "")
         name = (name or "").strip()
         if name.startswith("__") and name not in DISCARD and name != SKIP:
@@ -449,10 +469,11 @@ class FaceReview(object):
             # Classified or deleted already -- from another tap, or in the GUI.
             return 200, {"message": "Already handled"}
         try:
-            if name in DISCARD:
+            if name in DISCARD or not trainable:
                 r = self.http.post(self.cfg.frigate_url + "/api/faces/train/delete",
                                    json={"ids": [filename]}, timeout=15)
-                done = DISCARD[name]
+                done = DISCARD.get(name) or (
+                    "Noted as %s; not sharp enough to train, removed" % name)
             else:
                 r = self.http.post("%s/api/faces/train/%s/classify" % (self.cfg.frigate_url, quote(name)),
                                    json={"training_file": filename}, timeout=15)

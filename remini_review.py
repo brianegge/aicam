@@ -467,6 +467,12 @@ class ReminiReview(object):
         for m in self._all():
             if m.get("answered") and m["answered"] >= cutoff and m["state"] not in ("pending", "held"):
                 row = {k: m.get(k) for k in keep}
+                # She is in the photo even though it was closed as rejected: the
+                # outfit check saw her but only partly (a sleeve, far away), or the
+                # question was withdrawn for that reason. Its faces must not be
+                # learned as not-her.
+                row["outfit_present"] = bool((m.get("outfit") or {}).get("present")) or \
+                    str(m.get("why", "")).startswith("withdrawn")
                 row["faces"] = [f["box"] for f in m.get("faces") or []]
                 out.append(row)
         return out

@@ -351,3 +351,18 @@ def test_a_sleeve_or_a_speck_is_not_asked_about(tmp_path):
         held = r.add_noface(jpeg(), source=vis, date="2026-10-13")[1]["id"]
         r.process_held()
         assert r._load(held)["state"] == expect, vis
+
+
+def test_labels_flag_photos_the_outfit_check_saw_her_in(tmp_path):
+    r, http, _ = make(tmp_path)
+    ref = r.add_candidate(jpeg(), [100, 50, 40, 40], source="face", date="2026-10-13", predicted="yes",
+                          label="Chloe 0.8", train=False)[1]["id"]
+    r.accept_rest()
+    http.outfit_answer = {"present": True, "visibility": "partial", "why": "a sleeve"}
+    sliver = r.add_noface(jpeg(), source="sliver", date="2026-10-13")[1]["id"]
+    http.outfit_answer = {"present": False, "why": "a boy"}
+    other = r.add_noface(jpeg(), source="other", date="2026-10-13")[1]["id"]
+    r.process_held()
+    got = {l["source"]: l for l in r.labels()}
+    assert got["sliver"]["state"] == "rejected" and got["sliver"]["outfit_present"] is True
+    assert got["other"]["outfit_present"] is False

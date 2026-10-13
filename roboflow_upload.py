@@ -1025,7 +1025,8 @@ class UploadHandler(BaseHTTPRequestHandler):
             self._respond(400, {"error": "bad photo: %s" % e})
             return
         self._respond(*_remini.add_noface(image, body.get("source"), body.get("date"),
-                                          body.get("caption"), share=body.get("share", True)))
+                                          body.get("caption"), share=body.get("share", True),
+                                          faces=body.get("faces")))
 
     def _remini_candidate(self):
         """From remini-chloe on the LAN: {image: base64 jpeg, box, score, source, date}."""

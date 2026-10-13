@@ -309,7 +309,7 @@ class ReminiReview(object):
         return 200, {"message": message}
 
     # ------------------------------------------------------------------ no-face photos
-    def add_noface(self, image_bytes, source=None, date=None, caption=None, share=True):
+    def add_noface(self, image_bytes, source=None, date=None, caption=None, share=True, faces=None):
         """A photo with no detectable face: held, not asked about, until the day
         has a confirmed photo of her to compare outfits against."""
         if source and any(m.get("source") == source for m in self._all()):
@@ -319,9 +319,13 @@ class ReminiReview(object):
         cid = uuid.uuid4().hex[:12]
         with open(self._path(cid, "jpg"), "wb") as f:
             f.write(image_bytes)
+        # faces: the face model's boxes, kept so an outfit match is asked about
+        # with numbered faces -- tapping her number then teaches the face model a
+        # face it missed (looking down, at an angle), not just "she is in it".
         self._save(cid, {"id": cid, "state": "held", "source": source, "date": date,
                          "caption": caption or "", "share": bool(share), "added": self.now(),
-                         "faces": [], "summarized": self.now()})
+                         "faces": sorted(faces or [], key=lambda f: f["box"][0]),
+                         "summarized": self.now()})
         return 200, {"id": cid, "status": "held"}
 
     def reference_sheet(self, date, limit=8, height=360):

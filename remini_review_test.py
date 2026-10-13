@@ -367,3 +367,19 @@ def test_labels_flag_photos_the_outfit_check_saw_her_in(tmp_path):
     got = {l["source"]: l for l in r.labels()}
     assert got["sliver"]["state"] == "rejected" and got["sliver"]["outfit_present"] is True
     assert got["other"]["outfit_present"] is False
+
+
+def test_outfit_match_is_asked_with_numbered_faces_and_a_pick_records_her_face(tmp_path):
+    r, http, _ = make(tmp_path)
+    ref = r.add_candidate(jpeg(), [100, 50, 40, 40], source="face", date="2026-10-13", predicted="yes",
+                          label="Chloe 0.8", train=False)[1]["id"]
+    r.accept_rest()
+    http.outfit_answer = {"present": True, "visibility": "subject", "where": "center", "why": "pink top"}
+    faces = [{"box": [200, 10, 40, 40], "cls": "classmate"}, {"box": [20, 10, 40, 40], "cls": "unknown"}]
+    held = r.add_noface(jpeg(), source="tray", date="2026-10-13", faces=faces)[1]["id"]
+    r.process_held()
+    assert "faces=2" in http.pushes[-1]["url"]
+    code, res = r.confirm(held, "face:1")                  # sorted left to right: x=20 is face 1
+    assert code == 200 and r._load(held)["box"] == [20, 10, 40, 40]
+    lab = {l["source"]: l for l in r.labels()}["tray"]
+    assert lab["chloe_face"] == 1 and lab["box"] == [20, 10, 40, 40]

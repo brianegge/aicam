@@ -383,7 +383,7 @@ class ReminiReview(object):
         try:
             r = self.http.post("https://openrouter.ai/api/v1/chat/completions", timeout=60,
                                headers={"Authorization": "Bearer " + self.cfg.outfit_key}, json={
-                "model": self.cfg.outfit_model, "max_tokens": 1000,
+                "model": self.cfg.outfit_model, "max_tokens": 3000,  # reasoning is charged first; 1000 truncated the JSON
                 "response_format": {"type": "json_object"},
                 "messages": [{"role": "user", "content": [
                     {"type": "text", "text": self.OUTFIT_PROMPT},

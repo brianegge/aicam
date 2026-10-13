@@ -363,3 +363,18 @@ def test_naming_a_no_train_face_removes_it_without_training(tmp_path):
     code, result = rev.classify(B1, "Kyle", trainable=False)
     assert code == 200 and "not sharp enough" in result["message"]
     assert http.posts == [(rev.cfg.frigate_url + "/api/faces/train/delete", {"ids": [B1]})]
+
+
+def test_a_confident_name_is_not_asked_as_a_question(tmp_path):
+    """Remi at 99% on 2026-10-13 arrived titled 'Who is this?'."""
+    remi = "1790000000.1-rem001-1790000001.5-Remi-0.99.webp"
+    rev, http = _visit(tmp_path, {remi: webp(100, 100)})
+    rev.poll_once()
+    assert http.pushes[0]["title"] == "Recognised: Remi"
+
+
+def test_an_unknown_or_unsure_face_is_still_asked(tmp_path):
+    unsure = "1790000000.1-uns001-1790000001.5-Remi-0.85.webp"
+    rev, http = _visit(tmp_path, {unsure: webp(100, 100), B1: webp(100, 100)})
+    rev.poll_once()
+    assert {p["title"] for p in http.pushes} == {"Who is this?"}

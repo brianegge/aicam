@@ -423,7 +423,12 @@ class FaceReview(object):
         token, user = self.cfg.pushover
         data = {
             "token": token, "user": user,
-            "title": "Who is this?",
+            # Not a question when Frigate already named them at its own
+            # threshold (Remi at 99%, 2026-10-13): the picture is still there to
+            # check, and naming still works, but nothing is being asked.
+            "title": ("Recognised: %s" % guess
+                      if guess != "unknown" and attempt["score"] >= NAMED_SCORE
+                      else "Who is this?"),
             "message": message,
             "timestamp": int(attempt["ts"]),
             "priority": self.cfg.priority,

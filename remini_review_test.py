@@ -360,6 +360,7 @@ def test_labels_flag_photos_the_outfit_check_saw_her_in(tmp_path):
     r.accept_rest()
     http.outfit_answer = {"present": True, "visibility": "partial", "why": "a sleeve"}
     sliver = r.add_noface(jpeg(), source="sliver", date="2026-10-13")[1]["id"]
+    r.process_held()
     http.outfit_answer = {"present": False, "why": "a boy"}
     other = r.add_noface(jpeg(), source="other", date="2026-10-13")[1]["id"]
     r.process_held()

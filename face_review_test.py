@@ -370,7 +370,7 @@ def test_a_confident_name_is_not_asked_as_a_question(tmp_path):
     remi = "1790000000.1-rem001-1790000001.5-Remi-0.99.webp"
     rev, http = _visit(tmp_path, {remi: webp(100, 100)})
     rev.poll_once()
-    assert http.pushes[0]["title"] == "Recognised: Remi"
+    assert http.pushes[0]["title"] == "Remi at front entry"
 
 
 def test_an_unknown_or_unsure_face_is_still_asked(tmp_path):

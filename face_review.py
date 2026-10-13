@@ -426,7 +426,7 @@ class FaceReview(object):
             # Not a question when Frigate already named them at its own
             # threshold (Remi at 99%, 2026-10-13): the picture is still there to
             # check, and naming still works, but nothing is being asked.
-            "title": ("Recognised: %s" % guess
+            "title": (("%s at %s" % (guess, camera.replace("_", " ")) if camera else guess)
                       if guess != "unknown" and attempt["score"] >= NAMED_SCORE
                       else "Who is this?"),
             "message": message,

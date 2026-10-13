@@ -339,3 +339,15 @@ def test_outfit_check_falls_back_to_the_verify_key(tmp_path):
 def test_outfit_check_can_be_turned_off(tmp_path):
     r, _, _ = make(tmp_path, **{"api-key": "own", "outfit-check": "false"})
     assert r.cfg.outfit_key is None
+
+
+def test_a_sleeve_or_a_speck_is_not_asked_about(tmp_path):
+    r, http, _ = make(tmp_path)
+    ref = r.add_candidate(jpeg(), [100, 50, 40, 40], source="face", date="2026-10-13", predicted="yes",
+                          label="Chloe 0.8", train=False)[1]["id"]
+    r.accept_rest()
+    for vis, expect in (("partial", "rejected"), ("tiny", "rejected"), ("clear", "pending"), ("subject", "pending")):
+        http.outfit_answer = {"present": True, "visibility": vis, "where": "left", "why": "x"}
+        held = r.add_noface(jpeg(), source=vis, date="2026-10-13")[1]["id"]
+        r.process_held()
+        assert r._load(held)["state"] == expect, vis

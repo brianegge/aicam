@@ -360,9 +360,22 @@ class ReminiReview(object):
         "she wears the same clothes all day (she may take a layer off). Image 2 is another photo from the same "
         "classroom on the same day. Is the girl from image 1 in image 2? Her face may be hidden, turned away, "
         "blurred or too small, so compare clothing, accessories, hair and build. Other children wear similar "
-        "colours, so only say yes when the details match. Reply only with JSON "
-        '{"present": true|false, "confidence": "high"|"medium"|"low", "where": "<short, or empty>", '
-        '"why": "<one sentence>"}')
+        "colours, so only say yes when the details match. Also say how much of her the photo shows: "
+        '"subject" if she is a main subject, "clear" if she is fully visible but not the focus, '
+        '"partial" if only part of her is in frame (an arm, a sleeve, cut off by the edge), '
+        '"tiny" if she is far away or very small. Reply only with JSON '
+        '{"present": true|false, "visibility": "subject"|"clear"|"partial"|"tiny", '
+        '"confidence": "high"|"medium"|"low", "where": "<short, or empty>", "why": "<one sentence>"}')
+
+    # A sleeve at the edge of the frame or a speck in the background is her, but
+    # not a photo of her (Brian, 2026-10-13). Only these are asked about.
+    WORTH_ASKING = ("subject", "clear")
+
+    @classmethod
+    def worth_asking(cls, verdict):
+        """Present, and enough of her to be a photo of her. A verdict without a
+        visibility (an older prompt) counts, rather than silently dropping her."""
+        return bool(verdict.get("present")) and verdict.get("visibility", "clear") in cls.WORTH_ASKING
 
     def ask_outfit(self, sheet, photo):
         """The vision model's verdict on one photo, or None if it could not be had."""
@@ -404,7 +417,7 @@ class ReminiReview(object):
                 if verdict is None:
                     continue  # try again next pass
                 m["outfit"] = verdict
-                if verdict.get("present"):
+                if self.worth_asking(verdict):
                     m.update(state="pending", predicted="yes", summarized=None,
                              label="%s (outfit%s)" % (self.cfg.name,
                                                       ": " + verdict["where"] if verdict.get("where") else ""))
@@ -416,7 +429,9 @@ class ReminiReview(object):
                     m.update(state="rejected", answered=self.now())
                     self._save(m["id"], m)
                 logger.info("remini review: outfit check %s %s: %s", m["id"],
-                            "match" if verdict.get("present") else "no match", verdict.get("why", "")[:120])
+                            "match" if self.worth_asking(verdict) else
+                            "present but %s, not asked" % verdict.get("visibility") if verdict.get("present") else
+                            "no match", verdict.get("why", "")[:120])
         return asked
 
     def accept_rest(self):

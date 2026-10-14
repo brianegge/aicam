@@ -312,6 +312,10 @@ def announce_held(cam, track, config, ha, model_name):
         # nothing showed whether notify() then sent it.
         logger.info("%s: held sighting went to notify at p%s (%s)", cam.name,
                     priority, track.get("priority_type"))
+        # A clip, as the main alert path makes one: Frigate's own model has no
+        # deer, so without this the tree-line deer announced at 00:24 on
+        # 2026-10-14 left no event and no clip. Started back at the sighting.
+        frigate_events.mark(cam, [track], config, pre_capture=ago + 5)
     except Exception:
         logger.exception("announcing held %s on %s failed", track["tagName"], cam.name)
     return timer() - start

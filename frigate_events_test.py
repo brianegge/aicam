@@ -87,3 +87,10 @@ def test_a_frigate_failure_is_only_a_log_line():
     with mock.patch.object(frigate_events.requests, "post",
                            side_effect=frigate_events.requests.ConnectionError("down")):
         frigate_events._post("http://frigate.home:5000", "tree_line", "raccoon", {})
+
+
+def test_a_held_sighting_starts_its_event_back_at_the_sighting():
+    """The tree-line deer was announced well after it was first seen."""
+    held = frigate_events.events_for(_Cam(), [_p("deer")], _cfg(), pre_capture=19.6)
+    assert held[0][2]["pre_capture"] == 19
+    assert "pre_capture" not in frigate_events.events_for(_Cam(), [_p("deer")], _cfg())[0][2]

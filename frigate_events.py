@@ -43,8 +43,13 @@ def _labels(config):
     return set(l.strip() for l in raw.split(",") if l.strip())
 
 
-def events_for(cam, predictions, config):
-    """The (camera, label, body) events worth creating for one alert."""
+def events_for(cam, predictions, config, pre_capture=None):
+    """The (camera, label, body) events worth creating for one alert.
+
+    `pre_capture` starts the event that many seconds before now, for an alert
+    about something seen earlier -- a held sighting announced once its class
+    confirmed (detect.announce_held).
+    """
     if "frigate" not in config or not config["frigate"].get("url"):
         return []
     camera = frigate_camera_name(cam)
@@ -71,13 +76,16 @@ def events_for(cam, predictions, config):
                           p["boundingBox"]["width"], p["boundingBox"]["height"]],
                   "score": int(round(p.get("probability", 0) * 100))}
                  for p in preds if "boundingBox" in p]
-        out.append((camera, label, {
+        body = {
             "sub_label": "aicam",
             "score": round(best, 3),
             "duration": duration,
             "include_recording": True,
             "draw": {"boxes": boxes},
-        }))
+        }
+        if pre_capture is not None:
+            body["pre_capture"] = int(pre_capture)
+        out.append((camera, label, body))
     return out
 
 
@@ -92,9 +100,9 @@ def _post(base_url, camera, label, body):
         logger.warning("frigate: could not create a %s event on %s: %s", label, camera, e)
 
 
-def mark(cam, predictions, config):
+def mark(cam, predictions, config, pre_capture=None):
     """Create the events for this alert in the background. Returns how many."""
-    events = events_for(cam, predictions, config)
+    events = events_for(cam, predictions, config, pre_capture)
     base_url = config["frigate"]["url"] if events else None
     for camera, label, body in events:
         threading.Thread(target=_post, args=(base_url, camera, label, body),

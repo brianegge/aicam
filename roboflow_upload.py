@@ -832,6 +832,8 @@ def announce(code, result, filename):
                     os.path.basename(filename or "?"))
         return
     token, user = _config.pushover
+    if result.get("remini") and _remini is not None and _remini.cfg.pushover:
+        token, user = _remini.cfg.pushover   # Remini's own Pushover application
     message = tap_message(code, result, filename)
     data = urlencode({
         "token": token, "user": user,

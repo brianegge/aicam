@@ -383,3 +383,9 @@ def test_outfit_match_is_asked_with_numbered_faces_and_a_pick_records_her_face(t
     assert code == 200 and r._load(held)["box"] == [20, 10, 40, 40]
     lab = {l["source"]: l for l in r.labels()}["tray"]
     assert lab["chloe_face"] == 1 and lab["box"] == [20, 10, 40, 40]
+
+
+def test_remini_can_use_its_own_pushover_application(tmp_path):
+    r, http, _ = make(tmp_path, **{"pushover-token": "remini-app"})
+    r.add_candidate(jpeg(), [1, 1, 80, 80], source="a")
+    assert http.pushes[-1]["token"] == "remini-app" and http.pushes[-1]["user"] == "u"

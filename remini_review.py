@@ -104,6 +104,10 @@ class ReminiReviewConfig(object):
         self.dir = s.get("dir", os.path.join(config["detector"]["save-path"], "remini"))
         self.pushover = (config["pushover"]["token"], config["pushover"]["user"]) \
             if config.has_section("pushover") else None
+        # Its own Pushover application (2026-10-13), so Remini questions arrive
+        # under their own name and quota rather than as aicam alerts.
+        if self.pushover and s.get("pushover-token"):
+            self.pushover = (s["pushover-token"], self.pushover[1])
 
     @staticmethod
     def enabled(config):

@@ -108,6 +108,11 @@ def recently_seen(recent_objects, tag_name, now, hold_seconds=OBJECT_HOLD_SECOND
     return (now - seen_at).total_seconds() < hold_seconds
 
 
+# Pets come and go all day; their leaving is not news, and its frame is an
+# empty floor. Asked for 2026-10-15. Logged and counted as before.
+SILENT_DEPARTURES = {"cat", "dog", "cat_road", "dog_road"}
+
+
 def alert_text_predictions(predictions):
     """What the alert's text names: not what an earlier frame already ruled
     out. The parked cars in the garage carry priority -4 from the "vehicle in
@@ -619,6 +624,8 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         logger.info(e["msg"])
         if e.get("unconfirmed"):
             # Never announced, so its departure is not news either.
+            continue
+        if e["tagName"] in SILENT_DEPARTURES:
             continue
         if datetime.now() - e["start_time"] > timedelta(minutes=2) and e["age"] > 4:
             notify_expired.append(e)

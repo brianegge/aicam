@@ -513,3 +513,13 @@ def test_announcing_a_held_track_sends_its_own_frame(monkeypatch):
     detect.announce_held(_HeldCam(), track, None, None, "grey")
     assert sent == [("raccoon 87% near peach tree, 11s earlier", "frame-0.87")]
     assert "held_image" not in track
+
+
+def test_parked_cars_are_not_named_in_an_animal_alert():
+    """04:03 on 2026-10-15: "cat 97%,vehicle 92% in garage"."""
+    cat = {"tagName": "cat", "probability": 0.97}
+    parked = {"tagName": "vehicle", "probability": 0.92, "iou": 1.0, "priority": -4}
+    arriving = {"tagName": "vehicle", "probability": 0.9}
+    assert detect.alert_text_predictions([cat, parked]) == [cat]
+    assert detect.alert_text_predictions([cat, parked, arriving]) == [cat, arriving]
+    assert detect.alert_text_predictions([parked]) == [parked]

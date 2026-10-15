@@ -108,6 +108,18 @@ def recently_seen(recent_objects, tag_name, now, hold_seconds=OBJECT_HOLD_SECOND
     return (now - seen_at).total_seconds() < hold_seconds
 
 
+def alert_text_predictions(predictions):
+    """What the alert's text names: not what an earlier frame already ruled
+    out. The parked cars in the garage carry priority -4 from the "vehicle in
+    garage" rule, and the cat that walked past them at 04:03 on 2026-10-15
+    went out as "cat 97%,vehicle 92% in garage". They stay in the image. If
+    that leaves nothing -- a plate read on a parked car -- name everything.
+    """
+    shown = [p for p in predictions
+             if p.get("priority") is None or p["priority"] > -4]
+    return shown or predictions
+
+
 def label_with_confidence(tag_names, predictions):
     """"dog 79% (vs deer 93%),person 87% (confirmed 95%, amazon)" for the alert.
 
@@ -697,8 +709,8 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
 
     # Notify on movement, and also when a plate is read for the first time.
     if len(new_objects) or new_plates:
-        seen = label_with_confidence(
-            set(p["tagName"] for p in alert_predictions), alert_predictions)
+        shown = alert_text_predictions(alert_predictions)
+        seen = label_with_confidence(set(p["tagName"] for p in shown), shown)
         # Say when the second opinion could not be had. A gate that fails open
         # silently reads exactly like a gate that passed the detection.
         unverified = verify.unverified_note(alert_predictions)

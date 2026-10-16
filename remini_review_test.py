@@ -8,8 +8,16 @@ import numpy as np
 import remini_review as rr
 
 
+_jpegs = [0]
+
+
 def jpeg(w=400, h=300):
-    ok, buf = cv2.imencode(".jpg", np.full((h, w, 3), 100, np.uint8))
+    """A distinct image each call: identical bytes on one day are one photo
+    (content de-duplication), which every test would otherwise trip."""
+    _jpegs[0] += 1
+    img = np.full((h, w, 3), 100, np.uint8)
+    img[0, 0] = (_jpegs[0] % 256, _jpegs[0] // 256 % 256, 7)
+    ok, buf = cv2.imencode(".png", img)
     return buf.tobytes()
 
 
@@ -389,3 +397,17 @@ def test_remini_can_use_its_own_pushover_application(tmp_path):
     r, http, _ = make(tmp_path, **{"pushover-token": "remini-app"})
     r.add_candidate(jpeg(), [1, 1, 80, 80], source="a")
     assert http.pushes[-1]["token"] == "remini-app" and http.pushes[-1]["user"] == "u"
+
+
+def test_the_same_photo_under_two_urls_is_one_question(tmp_path):
+    r, http, _ = make(tmp_path)
+    img = jpeg()
+    a = r.add_candidate(img, [1, 1, 80, 80], source="https://cdn/a.jpg", date="2026-10-15")
+    b = r.add_candidate(img, [1, 1, 80, 80], source="https://cdn/b.jpg", date="2026-10-15")
+    assert a[1]["status"] == "pending" and b[1]["status"] == "duplicate" and len(http.pushes) == 1
+    r.confirm(a[1]["id"], "no")
+    c = r.add_candidate(img, [1, 1, 80, 80], source="https://cdn/c.jpg", date="2026-10-15")
+    assert c[1]["status"] == "duplicate"                    # still a duplicate once answered
+    assert r.add_noface(img, source="https://cdn/d.jpg", date="2026-10-15")[1]["status"] == "duplicate"
+    other = jpeg(401, 300)
+    assert r.add_candidate(other, [1, 1, 80, 80], source="https://cdn/e.jpg", date="2026-10-15")[1]["status"] == "pending"

@@ -22,6 +22,7 @@ copied into config.txt: the server runs on this host and owns that file.
 Configured by an optional `[remini-review]` section; without it nothing runs.
 """
 import base64
+import hashlib
 import datetime
 import json
 import logging
@@ -156,9 +157,13 @@ class ReminiReview(object):
         img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             return 400, {"error": "not an image"}
-        # The same photo twice (a re-run, a re-post) is one question, not two.
+        # The same photo twice is one question, not two: a re-run (same source),
+        # or Remini posting identical bytes under a second URL (2026-10-15: two
+        # photos each went to the group twice). Content, not name, decides.
+        sha = hashlib.sha1(image_bytes).hexdigest()
         for meta in self._all():
-            if source and meta.get("source") == source and meta["state"] == "pending":
+            if (source and meta.get("source") == source and meta["state"] == "pending") or \
+                    (meta.get("sha") == sha and meta.get("date") == date and meta["state"] != "held"):
                 return 200, {"id": meta["id"], "status": "duplicate"}
         cid = uuid.uuid4().hex[:12]
         with open(self._path(cid, "jpg"), "wb") as f:
@@ -169,7 +174,7 @@ class ReminiReview(object):
         # correct the wrong ones; "Accept the rest" applies it to the untouched.
         # train=False: the box is only a pointer for the eye ("is she anywhere in
         # this photo?") -- it may well be a classmate, so it must never register.
-        meta = {"id": cid, "state": "pending", "score": score,
+        meta = {"id": cid, "state": "pending", "score": score, "sha": sha,
                 "source": source, "date": date, "added": self.now(), "share": bool(share),
                 "caption": caption or "", "predicted": predicted, "label": label,
                 "faces": sorted(faces or [], key=lambda f: f["box"][0])}
@@ -318,7 +323,9 @@ class ReminiReview(object):
     def add_noface(self, image_bytes, source=None, date=None, caption=None, share=True, faces=None):
         """A photo with no detectable face: held, not asked about, until the day
         has a confirmed photo of her to compare outfits against."""
-        if source and any(m.get("source") == source for m in self._all()):
+        sha = hashlib.sha1(image_bytes).hexdigest()
+        if any((source and m.get("source") == source) or (m.get("sha") == sha and m.get("date") == date)
+               for m in self._all()):
             return 200, {"status": "duplicate"}
         if cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR) is None:
             return 400, {"error": "not an image"}
@@ -328,7 +335,7 @@ class ReminiReview(object):
         # faces: the face model's boxes, kept so an outfit match is asked about
         # with numbered faces -- tapping her number then teaches the face model a
         # face it missed (looking down, at an angle), not just "she is in it".
-        self._save(cid, {"id": cid, "state": "held", "source": source, "date": date,
+        self._save(cid, {"id": cid, "state": "held", "source": source, "date": date, "sha": sha,
                          "caption": caption or "", "share": bool(share), "added": self.now(),
                          "faces": sorted(faces or [], key=lambda f: f["box"][0]),
                          "summarized": self.now()})

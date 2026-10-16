@@ -217,8 +217,10 @@ class ReminiReview(object):
             message += "\n" + LEGEND
         if not meta.get("share", True):
             message += " (training only, not shared)"
-        if meta.get("score") is not None:
-            message += ", Frigate %.0f%%" % (100 * float(meta["score"]))
+        # The score was Frigate's once; since the preschool model it is already
+        # in the label ("Chloe 0.72"), so it is shown only when there is no label.
+        if meta.get("score") is not None and not meta.get("label"):
+            message += ", score %.2f" % float(meta["score"])
         token, user = self.cfg.pushover
         page = self.cfg.page_url + ("&" if "?" in self.cfg.page_url else "?") + \
             urlencode({k: v for k, v in (("file", cid), ("name", self.cfg.name),

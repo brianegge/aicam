@@ -374,6 +374,15 @@ the held photo. A match becomes an ordinary candidate guessed "Chloe (outfit:
 ~$0.003 a photo, 3-8 s. Only no-face photos and crops of her leave the house.
 `outfit-check = false` turns it off.
 
+**Face matches share without asking** (`auto-share-faces = true`, 2026-10-16,
+after 29/29 face guesses were right; optional `auto-share-min`). Outfit
+matches are still asked. With auto-share on, open questions no longer hold
+the batch; a day already in the chat gets "More of Chloe Oct 15" instead of
+the note again. After a batch with auto-shared photos, one Pushover "Sent N
+photos" carries a numbered grid and links to `remini-sent.html` (install
+beside remini-review.html): "Not N" marks an auto-shared photo rejected so the
+model learns it -- it cannot unsend.
+
 State is one `<id>.json` + `<id>.jpg` per candidate in `<save-path>/remini/`
 (pending -> confirmed|rejected -> sent; `trained` for share=false). Rejected
 ones are deleted after `keep-rejected-days` (30); confirmed, trained and sent

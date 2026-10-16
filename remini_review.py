@@ -91,6 +91,12 @@ class ReminiReviewConfig(object):
         # to answer "Already answered" to a repeat tap. Confirmed, trained and
         # sent ones stay: they are the photos of her.
         self.rejected_days = s.getint("keep-rejected-days", 30)
+        # Face matches skip the question and go straight to the group (Brian,
+        # 2026-10-16): 29 of 29 face guesses had been right. Outfit matches are
+        # still asked. auto-share-min keeps a floor on the face score.
+        self.auto_share = s.getboolean("auto-share-faces", False)
+        self.auto_share_min = s.getfloat("auto-share-min", 0.0)
+        self.sent_page_url = s.get("sent-page-url", self.page_url.replace("remini-review.html", "remini-sent.html"))
         # Photos with no detectable face go to a vision model (aicam's
         # [verify] OpenRouter account) with a contact sheet of the day's
         # confirmed photos of her -- children wear one outfit all day. On the
@@ -179,9 +185,27 @@ class ReminiReview(object):
                 "caption": caption or "", "predicted": predicted, "label": label,
                 "faces": sorted(faces or [], key=lambda f: f["box"][0])}
         meta["box" if train else "box_shown"] = box
+        if self._auto(meta, score):
+            meta.update(state="confirmed", accepted=True, auto=True, answered=self.now(),
+                        summarized=self.now())
+            self._save(cid, meta)
+            logger.info("remini review: %s shared without asking (%s)", cid, meta.get("label"))
+            return 200, {"id": cid, "status": "auto"}
         self._save(cid, meta)
         self._ask(cid, img, meta)
         return 200, {"id": cid, "status": "pending"}
+
+    def _auto(self, meta, score):
+        """A face match ("Chloe 0.xx") meant for sharing, when auto-share is on."""
+        face_match = meta.get("predicted") == "yes" and \
+            (meta.get("label") or "").startswith("%s 0." % self.cfg.name)
+        if not (self.cfg.auto_share and face_match and meta.get("share", True)):
+            return False
+        try:
+            s = float(score) if score is not None else float(meta["label"].split()[1])
+        except (ValueError, IndexError):
+            return False
+        return s >= self.cfg.auto_share_min
 
     def _ask(self, cid, img, meta):
         if not self.cfg.pushover:
@@ -273,6 +297,13 @@ class ReminiReview(object):
                 # corrections were refused this way, silently). A person's own
                 # answer, or a photo already shared, stays as it is -- and says
                 # so with a 409, which announce() does not keep quiet.
+                if meta["state"] == "sent" and meta.get("auto") and answer in (NO, NOT_A_FACE):
+                    # Shared without asking, and wrong: it stays in the chat, but
+                    # the model must learn it was not her.
+                    meta.update(state="rejected", corrected=True, answered=self.now(),
+                                why="auto-shared, corrected")
+                    self._save(cid, meta)
+                    return 200, {"message": "Marked not %s (already in the chat; delete it there)" % self.cfg.name}
                 if not meta.get("accepted") or meta["state"] == "sent":
                     return 409, {"error": "Already answered: %s" % meta["state"]}
                 meta["accepted"] = False
@@ -614,7 +645,10 @@ class ReminiReview(object):
     # ------------------------------------------------------------------ digest
     def digest_due(self):
         items = self._all()
-        if any(m["state"] == "pending" for m in items):
+        # Open questions hold the batch so a day goes out as one message -- unless
+        # face matches share themselves: then waiting on an outfit question that
+        # may sit unanswered overnight would hold back the photos already known.
+        if not self.cfg.auto_share and any(m["state"] == "pending" for m in items):
             return []
         ready = [m for m in items if m["state"] == "confirmed"]
         if not ready:
@@ -633,9 +667,14 @@ class ReminiReview(object):
             groups = {}
             for m in sorted(ready, key=lambda m: (m.get("date") or "", m.get("added", 0))):
                 groups.setdefault((m.get("date") or "", m.get("caption") or ""), []).append(m)
+            # A day already in the chat gets "More of Chloe Oct 15", not the
+            # teacher's note again.
+            shared_days = {m.get("date") for m in self._all() if m["state"] == "sent"}
             for chat in self.cfg.chats:
                 for (date, caption), items in groups.items():
-                    self._bb_text(chat, password, self.header(date, caption))
+                    header = "More of %s %s" % (self.cfg.name, pretty_date(date)) if date in shared_days \
+                        else self.header(date, caption)
+                    self._bb_text(chat, password, header)
                     for m in items:
                         self._bb_photo(chat, password, self._path(m["id"], "jpg"))
             for m in ready:
@@ -643,7 +682,46 @@ class ReminiReview(object):
                 m["sent"] = self.now()
                 self._save(m["id"], m)
             logger.info("remini review: sent %d photo(s) to %s", len(ready), ", ".join(self.cfg.chats))
-            return len(ready)
+        self._announce_sent(ready)
+        return len(ready)
+
+    def _announce_sent(self, sent):
+        """After a batch goes out: one Pushover with what was sent, numbered, and a
+        page to say "not Chloe" for any of them -- it cannot unsend, but it
+        teaches the model. Only when something was shared without being asked."""
+        if not any(m.get("auto") for m in sent):
+            return
+        tiles = []
+        for n, m in enumerate(sent, 1):
+            img = cv2.imread(self._path(m["id"], "jpg"))
+            if img is None:
+                continue
+            h, w = img.shape[:2]
+            side = min(h, w)
+            t = cv2.resize(img[(h - side) // 2:(h + side) // 2, (w - side) // 2:(w + side) // 2], (220, 220))
+            cv2.rectangle(t, (0, 0), (46, 38), (0, 0, 0), -1)
+            cv2.putText(t, str(n), (6, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+            tiles.append(t)
+        image = None
+        if tiles:
+            tiles += [np.zeros((220, 220, 3), np.uint8)] * (-len(tiles) % 4)
+            grid = np.vstack([np.hstack(tiles[i:i + 4]) for i in range(0, len(tiles), 4)])
+            image = cv2.imencode(".jpg", grid, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
+        url = self.cfg.sent_page_url + ("&" if "?" in self.cfg.sent_page_url else "?") + \
+            urlencode({"ids": ",".join(m["id"] for m in sent), "name": self.cfg.name}, quote_via=quote)
+        days = sorted({pretty_date(m.get("date")) for m in sent})
+        if not self.cfg.pushover:
+            return
+        token, user = self.cfg.pushover
+        try:
+            self.http.post("https://api.pushover.net/1/messages.json", timeout=30,
+                           files={"attachment": ("sent.jpg", image, "image/jpeg")} if image else None,
+                           data={"token": token, "user": user, "priority": 0,
+                                 "title": "Sent %d photo%s of %s" % (len(sent), "" if len(sent) == 1 else "s", self.cfg.name),
+                                 "message": "%s, to the family chat. Not her in one? Tap to mark it." % ", ".join(days),
+                                 "url": url[:512], "url_title": "Mark one as not %s" % self.cfg.name})
+        except Exception:
+            logger.warning("remini review: could not announce the batch", exc_info=True)
 
     def header(self, date, caption):
         text = self.cfg.digest_text.format(name=self.cfg.name, date=pretty_date(date),

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<!--
+  "Not Chloe?" for photos already shared to the family chat without a question
+  (auto-share-faces, see remini_review.py). Linked from the "Sent N photos"
+  Pushover, whose picture is a numbered grid of what went out.
+  ?ids=<id1,id2,...>&name=<child>. A button calls the aicam_roboflow_review
+  webhook with model=remini, file=<id>, cam=no. It cannot unsend the photo --
+  delete it in Messages -- but the model learns it was not her.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sent photos</title>
+<style>
+ :root { color-scheme: dark; }
+ body{font-family:-apple-system,system-ui,sans-serif;max-width:520px;
+      margin:0 auto;padding:24px 16px 40px;background:#111;color:#eee}
+ h1{font-size:22px;font-weight:600;margin:0 0 6px}
+ .sub{color:#999;font-size:14px;margin:0 0 22px;line-height:1.4}
+ .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+ button{padding:18px 0;font-size:17px;font-weight:600;border:0;border-radius:12px;
+        color:#fff;background:#4b5563;-webkit-tap-highlight-color:transparent}
+ button:disabled{opacity:.35}
+ #out{margin-top:20px;padding:14px;border-radius:10px;background:#1c1c1e;
+      font-size:15px;color:#ddd;display:none}
+</style>
+</head>
+<body>
+<h1 id="h">Not her in one of them?</h1>
+<p class="sub">Numbers match the picture in the notification. Tapping one does not
+unsend it (delete it in Messages); it teaches the model that photo was not her.</p>
+<div class="grid" id="ids"></div>
+<div id="out"></div>
+<script>
+ var q = new URLSearchParams(location.search);
+ var ids = (q.get("ids") || "").split(",").filter(Boolean), name = q.get("name") || "her";
+ document.getElementById("h").textContent = "Not " + name + " in one of them?";
+ var grid = document.getElementById("ids"), out = document.getElementById("out");
+ function say(t) { out.textContent = t; out.style.display = "block"; }
+ ids.forEach(function (id, i) {
+   var b = document.createElement("button"); b.textContent = "Not " + (i + 1);
+   b.onclick = function () {
+     b.disabled = true; say("Sending…");
+     fetch(location.origin + "/api/webhook/aicam_roboflow_review?model=remini&cam=no&file=" + encodeURIComponent(id))
+       .then(function (r) { say(r.ok ? "Marked photo " + (i + 1) + " as not " + name + ". The confirmation will arrive as a notification."
+                                     : "Home Assistant answered " + r.status + "."); if (!r.ok) b.disabled = false; })
+       .catch(function (e) { say("Could not reach Home Assistant: " + e); b.disabled = false; });
+   };
+   grid.appendChild(b);
+ });
+ if (!ids.length) say("No photos in the link.");
+</script>
+</body>
+</html>

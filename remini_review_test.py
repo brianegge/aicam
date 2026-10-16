@@ -411,3 +411,37 @@ def test_the_same_photo_under_two_urls_is_one_question(tmp_path):
     assert r.add_noface(img, source="https://cdn/d.jpg", date="2026-10-15")[1]["status"] == "duplicate"
     other = jpeg(401, 300)
     assert r.add_candidate(other, [1, 1, 80, 80], source="https://cdn/e.jpg", date="2026-10-15")[1]["status"] == "pending"
+
+
+def test_face_matches_share_without_asking_and_outfit_questions_do_not_hold_them(tmp_path):
+    r, http, clock = make(tmp_path, **{"auto-share-faces": "true", "auto-share-min": "0.45"})
+    a = r.add_candidate(jpeg(), [1, 1, 80, 80], source="a", date="2026-10-15", caption="note",
+                        predicted="yes", label="Chloe 0.72", train=False)
+    low = r.add_candidate(jpeg(), [1, 1, 80, 80], source="b", date="2026-10-15", caption="note",
+                          predicted="yes", label="Chloe 0.41", train=False)
+    out = r.add_candidate(jpeg(), [1, 1, 80, 80], source="c", date="2026-10-15", caption="note",
+                          predicted="yes", label="Chloe (outfit: left)", train=False)
+    assert a[1]["status"] == "auto" and low[1]["status"] == "pending" and out[1]["status"] == "pending"
+    assert len(http.pushes) == 2                         # the two questions only
+    clock.t += 16 * 60
+    assert r.send_digest() == 1                          # open questions do not hold it back
+    assert http.texts[-1][1] == "Chloe Oct 15: note"
+    assert http.pushes[-1]["title"] == "Sent 1 photo of Chloe" and "ids=" + a[1]["id"] in http.pushes[-1]["url"]
+    r.confirm(out[1]["id"], "yes"); clock.t += 16 * 60
+    assert r.send_digest() == 1 and http.texts[-1][1] == "More of Chloe Oct 15"
+
+
+def test_a_no_on_an_auto_shared_photo_is_a_correction(tmp_path):
+    r, http, clock = make(tmp_path, **{"auto-share-faces": "true"})
+    a = r.add_candidate(jpeg(), [1, 1, 80, 80], source="a", date="2026-10-15", predicted="yes",
+                        label="Chloe 0.72", train=False)[1]["id"]
+    clock.t += 16 * 60; r.send_digest()
+    code, res = r.confirm(a, "no")
+    assert code == 200 and r._load(a)["state"] == "rejected"
+    assert {l["source"]: l for l in r.labels()}["a"]["state"] == "rejected"   # learned as not her
+
+
+def test_auto_share_is_off_by_default(tmp_path):
+    r, http, _ = make(tmp_path)
+    assert r.add_candidate(jpeg(), [1, 1, 80, 80], source="a", predicted="yes",
+                           label="Chloe 0.9")[1]["status"] == "pending"

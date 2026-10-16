@@ -445,3 +445,16 @@ def test_auto_share_is_off_by_default(tmp_path):
     r, http, _ = make(tmp_path)
     assert r.add_candidate(jpeg(), [1, 1, 80, 80], source="a", predicted="yes",
                            label="Chloe 0.9")[1]["status"] == "pending"
+
+
+def test_classmate_names_label_the_boxes_and_the_buttons(tmp_path, monkeypatch):
+    written = []
+    real = rr.cv2.putText
+    monkeypatch.setattr(rr.cv2, "putText", lambda img, text, *a, **k: written.append(text) or real(img, text, *a, **k))
+    r, http, _ = make(tmp_path)
+    faces = [{"box": [10, 10, 40, 40], "cls": "classmate", "name": "Adalynn"},
+             {"box": [200, 10, 40, 40], "cls": "chloe"}]
+    r.add_candidate(jpeg(), [200, 10, 40, 40], source="a", predicted="yes", label="Chloe 0.7",
+                    train=False, faces=faces)
+    assert "1 Adalynn" in written and "2" in written
+    assert "fn=Adalynn%7C" in http.pushes[-1]["url"]

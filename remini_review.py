@@ -221,8 +221,9 @@ class ReminiReview(object):
             colour = FACE_COLOURS.get(f.get("cls"), FACE_COLOURS["unknown"])
             cv2.rectangle(shown, (x - pad, y - pad), (x + w + pad, y + h + pad), colour,
                           t * 2 if f.get("cls") == "chloe" else t)
-            # The face's number, for "Face 2 is Chloe" on the page.
-            label = str(n)
+            # The face's number, for "Face 2 is Chloe" on the page, and the
+            # classmate's name when remini-chloe's model knows it.
+            label = "%d %s" % (n, f["name"]) if f.get("name") else str(n)
             scale = max(0.8, img.shape[1] / 1100.0)
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, scale, 2 * t // 3 + 1)
             lx, ly = max(0, x - pad), max(th + 8, y - pad)
@@ -254,7 +255,9 @@ class ReminiReview(object):
         page = self.cfg.page_url + ("&" if "?" in self.cfg.page_url else "?") + \
             urlencode({k: v for k, v in (("file", cid), ("name", self.cfg.name),
                                          ("guess", meta.get("label")),
-                                         ("faces", len(meta.get("faces") or []) or None)) if v},
+                                         ("faces", len(meta.get("faces") or []) or None),
+                                         ("fn", "|".join(f.get("name") or "" for f in meta.get("faces") or [])
+                                          if any(f.get("name") for f in meta.get("faces") or []) else None)) if v},
                       quote_via=quote)
         r = self.http.post("https://api.pushover.net/1/messages.json", timeout=30, data={
             "token": token, "user": user, "title": "Is this %s?" % self.cfg.name,

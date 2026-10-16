@@ -55,8 +55,12 @@ answered takes its "Looks like" guess. Guesses never teach Frigate; only your ta
  var nf = parseInt(q.get("faces") || "0", 10);
  if (nf > 0) {
    var fb = document.getElementById("faces");
+   var fn = (q.get("fn") || "").split("|");   // classmates' names, one per face (may be blank)
    for (var i = 1; i <= nf; i++) {
-     var b = document.createElement("button"); b.textContent = i; b.dataset.a = "face:" + i; fb.appendChild(b);
+     var b = document.createElement("button"); b.dataset.a = "face:" + i;
+     b.textContent = fn[i - 1] ? i + " · " + fn[i - 1] : i;
+     if (fn[i - 1]) { b.style.fontSize = "14px"; b.style.gridColumn = "span 2"; }
+     fb.appendChild(b);
    }
    document.getElementById("facepick").style.display = "block";
  }

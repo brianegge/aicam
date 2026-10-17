@@ -405,12 +405,22 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
         plates_db = _load_license_plates()
         house_cleaner_found = False
         pause_person_found = False
+        # Named in the text: the plates on vehicles this alert is about. A
+        # parked car carries priority -4 from the "vehicle in garage" rule, and
+        # at 02:17 on 2026-10-17 a cat walking past the Mach-E went out with
+        # the car named once per box on it, each line repeating the last:
+        # "...Mach-E and ...Mach-E and ...Mach-E AUDUSO". The rules below
+        # (house cleaner, crew pause) still see every plate. If no vehicle is
+        # news and nothing else is either, the plate read is the news.
+        news = [p for p in predictions if p.get("priority", 0) > -4]
+        shown = set(v["plate"] for v in vehicles
+                    if v.get("plate") and (v.get("priority", 0) > -4 or not news))
+        named = set()
         for plate in plates:
+            vehicle_message = ""
             matched_key = _match_plate(plate) or _match_plate(plate.replace(" ", ""))
             if matched_key:
                 r = plates_db[matched_key]
-                if len(vehicle_message) > 0:
-                    vehicle_message += " and "
                 if r.get("suppress_person"):
                     # A crew that works the property for an hour sets off the
                     # person detector continuously. Flagged per vehicle in
@@ -434,7 +444,8 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
                         "Ignoring {}'s vehicle with plate {}".format(r["owner"], plate)
                     )
                     vehicle_message = None
-            if vehicle_message is not None:
+            if vehicle_message is not None and plate in shown and plate not in named:
+                named.add(plate)
                 if vehicle_message == "":
                     vehicle_message = "Vehicle"
                 # Spoken aloud by lpr-enrich since 2026-09-26, not here. Both

@@ -356,3 +356,46 @@ class TestCatInGarage:
 
     def test_at_night_she_alerts_at_the_night_cat_priority(self, tmp_path):
         assert self._run("night", tmp_path) == 1
+
+
+def _sent_message(predictions, tmp_path, camera="garage"):
+    """The text notify() posts to Pushover."""
+    from PIL import Image
+    cam = mock.Mock()
+    cam.name = camera
+    cam.road_line = None
+    config = _config(tmp_path)
+    config["pushover"] = {"token": "t", "user": "u"}
+    config["priority"]["cat"] = "0"
+    ha = _ha()
+    ha.vacation_mode.return_value = False
+    with mock.patch.object(notify.requests, "post") as post:
+        post.return_value.status_code = 200
+        notify.notify(cam, "cat 95% in garage",
+                      Image.new("RGB", (1920, 1080), (40, 40, 40)),
+                      predictions, config, ha)
+    assert post.called
+    return post.call_args.kwargs["data"]["message"]
+
+
+def _parked(plate):
+    return dict(_vehicle(plate), iou=1.0)
+
+
+def _garage_cat():
+    return {"tagName": "cat", "probability": 0.95, "camName": "garage",
+            "boundingBox": {"left": 0.5, "top": 0.7, "width": 0.05, "height": 0.1},
+            "center": {"x": 0.52, "y": 0.75}}
+
+
+def test_a_cat_past_the_parked_car_does_not_name_the_car(tmp_path):
+    """02:17 on 2026-10-17: three boxes on one parked Mach-E, each named."""
+    msg = _sent_message([_garage_cat(), _parked("AUDUSD"), _parked("AUDUSD"),
+                         _parked("AUDUSD")], tmp_path)
+    assert msg == "cat 95% in garage"
+
+
+def test_an_arriving_car_is_named_once(tmp_path):
+    msg = _sent_message([_vehicle("AUDUSD"), _vehicle("AUDUSD")], tmp_path,
+                        camera="garage-l")
+    assert msg.count("AUDUSD") == 1 and " and " not in msg

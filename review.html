@@ -41,6 +41,12 @@
  .correct{background:#16a34a}
  .false{background:#dc2626}
  .flag{background:#4b5563}
+ .relabel{background:#2563eb}
+ #fix{display:none}
+ .box{display:flex;align-items:center;gap:10px;margin:8px 0;font-size:16px}
+ .box span{flex:0 0 auto;color:#bbb;min-width:5.5em}
+ select{flex:1;font-size:17px;padding:10px;border-radius:10px;background:#1c1c1e;
+        color:#eee;border:1px solid #333}
  button:disabled{opacity:.4}
  .note{color:#888;font-size:13px;margin:4px 2px 18px;line-height:1.4}
  #out{margin-top:20px;padding:14px;border-radius:10px;background:#1c1c1e;
@@ -54,9 +60,16 @@
 <button class="correct" data-v="correct">&#10003; All detections correct</button>
 <p class="note">Adds the frame to the training set with the boxes from the alert.</p>
 
-<button class="false" data-v="false">&#10007; All detections false</button>
-<p class="note">Adds it as a background example and silences that spot until the
-model is retrained.</p>
+<div id="fix">
+<div id="boxes"></div>
+<button class="relabel" data-v="relabel">&#8635; Right box, wrong class</button>
+<p class="note">Adds the frame with the alert's boxes, under the classes chosen
+above.</p>
+</div>
+
+<button class="false" data-v="false">&#8709; Nothing there</button>
+<p class="note">Trains it as a null image &mdash; nothing in the frame &mdash; and
+silences that spot until the model is retrained.</p>
 
 <button class="flag" data-v="flag">Flag for review</button>
 <p class="note">Uploads it unlabelled, to sort out later.</p>
@@ -70,6 +83,31 @@ model is retrained.</p>
  document.getElementById("which").textContent =
    (cam ? cam + " · " : "") + (file || "no frame given");
 
+ // Right box, wrong class: one picker per box, in the order the alert drew
+ // them (notify.review_page_url). Absent on alerts sent before 2026-10-19.
+ var boxes = (q.get("boxes") || "").split(",").filter(Boolean);
+ var classes = (q.get("classes") || "").split(",").filter(Boolean);
+ var pickers = [];
+ if (boxes.length && classes.length) {
+   var list = document.getElementById("boxes");
+   boxes.forEach(function (label, i) {
+     var row = document.createElement("label");
+     row.className = "box";
+     var name = document.createElement("span");
+     name.textContent = (boxes.length > 1 ? "Box " + (i + 1) + ": " : "") + label;
+     var pick = document.createElement("select");
+     classes.forEach(function (c) {
+       var o = document.createElement("option");
+       o.value = o.textContent = c;
+       if (c === label) o.selected = true;
+       pick.appendChild(o);
+     });
+     row.appendChild(name); row.appendChild(pick); list.appendChild(row);
+     pickers.push(pick);
+   });
+   document.getElementById("fix").style.display = "block";
+ }
+
  var out = document.getElementById("out");
  function say(text) { out.textContent = text; out.style.display = "block"; }
 
@@ -78,6 +116,8 @@ model is retrained.</p>
    var buttons = document.querySelectorAll("button");
    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
    say("Sending…");
+   if (verdict === "relabel")
+     verdict = "relabel:" + pickers.map(function (p) { return p.value; }).join(",");
    var name = verdict === "flag" ? file : file + "|" + verdict;
    fetch(location.origin + "/api/webhook/aicam_roboflow_review?file="
          + encodeURIComponent(name))

@@ -566,3 +566,46 @@ def test_a_notrain_face_tap_is_passed_through(monkeypatch):
     assert seen == {"filename": "f.webp", "name": "Kyle", "train": False}
     roboflow_upload._route_tap("f.webp", "face", "Kyle", set(), None)
     assert seen["train"] is True
+
+
+class TestRelabel:
+    """2026-10-19: the family dog, boxed right, went out as "person 66%"."""
+
+    def test_the_verdict_and_its_classes_ride_on_the_name(self):
+        assert roboflow_upload.split_verdict("abc123.jpg|relabel:dog") == ("abc123.jpg", "relabel")
+        assert roboflow_upload.relabels_in("abc123.jpg|relabel:dog,vehicle_road") == ["dog", "vehicle"]
+        assert roboflow_upload.relabels_in("abc123.jpg|correct") == []
+
+    def test_relabel_annotates_the_alerts_boxes_with_the_class_given(self, review, api):
+        _rewrite_boxes(review, [{"label": "deer", "left": 0.1, "top": 0.2,
+                                 "width": 0.02, "height": 0.03}])
+        code, result = roboflow_upload._do_upload("abc123.jpg|relabel:person", "", "", set())
+        assert code == 200 and result["verdict"] == "relabel"
+        assert api["annotate"].call_args[0][6] == [("person", 0.1, 0.2, 0.02, 0.03)]
+        assert "verdict-relabel" in api["upload"].call_args[1]["tags"]
+        assert roboflow_upload.tap_message(code, result, "abc123.jpg") == \
+            "Relabelled person, added to ipcams2"
+
+    def test_one_class_per_box(self, review, api):
+        _rewrite_boxes(review, [
+            {"label": "person", "left": 0.1, "top": 0.2, "width": 0.05, "height": 0.2},
+            {"label": "person", "left": 0.5, "top": 0.1, "width": 0.3, "height": 0.2}])
+        roboflow_upload._do_upload("abc123.jpg|relabel:person,vehicle", "", "", set())
+        sent = {c[0][1]: [b[0] for b in c[0][6]] for c in api["annotate"].call_args_list}
+        assert sent == {"ipcams2": ["person"], "pv2": ["vehicle"]}
+
+    def test_a_class_no_project_trains_is_refused(self, review, api):
+        code, result = roboflow_upload._do_upload("abc123.jpg|relabel:unicorn", "", "", set())
+        assert code == 400 and "unicorn" in result["error"]
+        assert not api["upload"].called
+
+    def test_a_relabel_after_correct_rewrites_it_and_moves_project(self, retiring, api):
+        roboflow_upload._do_upload("abc123.jpg|correct", "", "", set())
+        api["upload"].return_value = "img2"
+        code, result = roboflow_upload._do_upload("abc123.jpg|relabel:vehicle", "", "", set())
+        assert code == 200 and result["status"] == "changed"
+        sent = {c[0][1]: [b[0] for b in c[0][6]] for c in api["annotate"].call_args_list[1:]}
+        # Still in ipcams2, now with nothing of its classes: a null there.
+        assert sent == {"ipcams2": [], "pv2": ["vehicle"]}
+        assert roboflow_upload.tap_message(code, result, "abc123.jpg") == \
+            "Changed from confirmed: relabelled vehicle in ipcams2, pv2"

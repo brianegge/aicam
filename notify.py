@@ -100,7 +100,19 @@ def verdict_url(webhook_url, review_file, verdict):
     return webhook_url + separator + "file=" + quote(name, safe="")
 
 
-def review_page_url(page_url, review_file, cam_name):
+def review_classes(config):
+    """Every class a Roboflow project trains, from [roboflow] project.* keys:
+    what the review page offers when a box is right and its class is not."""
+    if "roboflow" not in config:
+        return []
+    classes = set()
+    for key, value in config["roboflow"].items():
+        if key.startswith("project."):
+            classes.update(c.strip() for c in value.split(",") if c.strip())
+    return sorted(classes)
+
+
+def review_page_url(page_url, review_file, cam_name, boxes=(), classes=()):
     """The same three verdicts behind one link, for when review.html is installed.
 
     The page is static and hosted by Home Assistant (/config/www, served at
@@ -108,10 +120,20 @@ def review_page_url(page_url, review_file, cam_name):
     webhook. Worth the install because opening it asserts nothing -- with
     inline links every verdict is a bare GET, and anything that follows a link
     to see what is behind it has voted.
+
+    The boxes' classes, in sidecar order, and the classes on offer ride along
+    so the page can correct a class without reaching this host: a dog boxed
+    right and called "person 66%" (2026-10-19) is a training example once its
+    class is fixed, and was otherwise only flaggable.
     """
+    query = {"file": review_file, "cam": cam_name.replace(" ", "_")}
+    labels = [b["label"][:-5] if b["label"].endswith("_road") else b["label"]
+              for b in boxes]
+    if labels and classes:
+        query["boxes"] = ",".join(labels)
+        query["classes"] = ",".join(classes)
     separator = "&" if "?" in page_url else "?"
-    return page_url + separator + urlencode(
-        {"file": review_file, "cam": cam_name.replace(" ", "_")})
+    return page_url + separator + urlencode(query, safe=",")
 
 
 def verdict_html(webhook_url, review_file):
@@ -553,7 +575,9 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
                 # link was tapped.
                 page = config["roboflow"].get("review-page-url", "")
                 if page:
-                    pushover_data["url"] = review_page_url(page, review_file, cam.name)
+                    pushover_data["url"] = review_page_url(
+                        page, review_file, cam.name, sidecar_boxes(predictions),
+                        review_classes(config))
                     pushover_data["url_title"] = "Review Detection"
                 elif not sidecar_boxes(predictions):
                     # Nothing in this frame to be right or wrong about -- a

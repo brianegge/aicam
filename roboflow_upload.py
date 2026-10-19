@@ -91,6 +91,9 @@ class Config(object):
     def notify_taps(config):
         return config["roboflow"].getboolean("notify-taps", True)
 
+    def known_classes(self):
+        return set().union(*self.projects.values())
+
     def projects_for_tags(self, tags):
         """Return list of project IDs that cover any of the given tags."""
         matched = []
@@ -240,7 +243,11 @@ _remini = None
 #   flag    -- upload it unannotated, label it by hand later (the original)
 #   correct -- the boxes in the alert were right; upload them as the annotation
 #   false   -- nothing in the frame was real; upload it as a background example
-VERDICTS = ("flag", "correct", "false")
+#   relabel -- the boxes were right and a class was wrong: "relabel:dog" (every
+#              box) or "relabel:dog,vehicle" (one per box, in sidecar order).
+#              Annotated like correct, with the classes given. Asked for
+#              2026-10-19, after the family dog went out as "person 66%".
+VERDICTS = ("flag", "correct", "false", "relabel")
 
 _MISSING = ("", "unknown", "none", "None")
 
@@ -258,10 +265,39 @@ def split_verdict(filename):
         return name, "flag"
     name, _, verdict = name.partition("|")
     verdict = verdict.strip().lower()
+    if verdict.startswith("relabel:"):
+        return name, "relabel"
     if verdict not in VERDICTS:
         logger.warning("unknown verdict %r on %s, treating as flag", verdict, name)
         return name, "flag"
     return name, verdict
+
+
+def relabels_in(filename):
+    """("abc.jpg|relabel:dog,cat") -> ["dog", "cat"]; [] for any other tap."""
+    verdict = os.path.basename(filename or "").partition("|")[2].strip().lower()
+    if not verdict.startswith("relabel:"):
+        return []
+    return [base_label(l.strip()) for l in verdict[len("relabel:"):].split(",") if l.strip()]
+
+
+def relabel(boxes, labels, known):
+    """The boxes with their classes corrected, or an error string.
+
+    One label applies to every box; otherwise there must be one per box.
+    Every label has to be a class some project trains, or the frame would
+    route nowhere -- or worse, add a class to a dataset by typo.
+    """
+    if not labels:
+        return "no class given"
+    unknown = sorted(set(l for l in labels if l not in known))
+    if unknown:
+        return "not a class any project trains: %s" % ", ".join(unknown)
+    if len(labels) == 1:
+        labels = labels * len(boxes)
+    if len(labels) != len(boxes):
+        return "%d classes for %d boxes" % (len(labels), len(boxes))
+    return [(l,) + tuple(b[1:]) for l, b in zip(labels, boxes)]
 
 
 def read_sidecar(review_dir, filename):
@@ -543,7 +579,7 @@ def unsilence(filename):
     return removed
 
 
-def _change_verdict(filename, earlier, verdict):
+def _change_verdict(filename, earlier, verdict, labels=()):
     """A second tap that disagrees with the first: rewrite what the first did.
 
     2026-10-05: "correct" was tapped on a false positive, and the right answer
@@ -557,13 +593,33 @@ def _change_verdict(filename, earlier, verdict):
     width, height = sidecar.get("width"), sidecar.get("height")
     boxes = [(base_label(b["label"]), b["left"], b["top"], b["width"], b["height"])
              for b in sidecar.get("boxes") or ()]
-    if not (width and height) or (verdict == "correct" and not boxes):
+    if not (width and height) or (verdict in ("correct", "relabel") and not boxes):
         return (409, {"error": "the frame for %s is gone; fix it in Roboflow" % filename})
     name, cam, model = earlier.get("name"), earlier.get("cam"), earlier.get("model")
+    if verdict == "relabel":
+        boxes = relabel(boxes, list(labels), _config.known_classes())
+        if isinstance(boxes, str):
+            return (400, {"error": boxes})
+        images = dict(images)
+        # A class can move the frame to a project it was never uploaded to:
+        # a "vehicle" that was a dog belongs in ipcams2.
+        for project_id in _config.projects_for_tags(set(b[0] for b in boxes)):
+            if project_id in images:
+                continue
+            try:
+                with open(os.path.join(_config.done_dir, filename), "rb") as f:
+                    image_id = upload_image(_config.api_key, project_id, name, f.read(),
+                                            tags=[(cam or "unknown").replace(" ", "_"),
+                                                  (model or "unknown").replace(" ", "_")])
+            except (IOError, HTTPError, URLError) as e:
+                logger.warning("Uploading %s to %s for a relabel failed: %s", name, project_id, e)
+                continue
+            if image_id:
+                images[project_id] = image_id
     annotated = []
     for project_id, image_id in sorted(images.items()):
         try:
-            if verdict == "correct":
+            if verdict in ("correct", "relabel"):
                 classes = _config.projects.get(project_id, set())
                 annotate(_config.api_key, project_id, image_id, name, width, height,
                          [b for b in boxes if b[0] in classes], overwrite=True)
@@ -580,6 +636,7 @@ def _change_verdict(filename, earlier, verdict):
         return (502, {"error": "could not change the verdict in Roboflow"})
     result = {"status": "changed", "file": filename, "verdict": verdict,
               "was": earlier.get("verdict"), "projects": annotated,
+              "labels": sorted(set(b[0] for b in boxes)) if verdict == "relabel" else None,
               "images": images, "name": name, "cam": cam, "model": model}
     if earlier.get("verdict") == "false":
         result["unsilenced"] = unsilence(filename)
@@ -609,6 +666,7 @@ def _change_verdict(filename, earlier, verdict):
 
 def _do_upload(filename, model, cam, detection_tags, verdict=None):
     """Upload a review image to Roboflow. Returns (status_code, result_dict)."""
+    labels = relabels_in(filename)
     filename, from_name = split_verdict(filename)
     verdict = _or(verdict, None) or from_name
     if verdict not in VERDICTS:
@@ -617,8 +675,9 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
 
     if not os.path.isfile(filepath):
         earlier = handled(filename)
-        if earlier and verdict in ("correct", "false") and verdict != earlier.get("verdict"):
-            return _change_verdict(filename, earlier, verdict)
+        if earlier and (verdict == "relabel" or (
+                verdict in ("correct", "false") and verdict != earlier.get("verdict"))):
+            return _change_verdict(filename, earlier, verdict, labels)
         if earlier:
             return (200, {"status": "already", "file": filename,
                           "verdict": earlier.get("verdict"),
@@ -632,6 +691,14 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
     detection_tags = set(t for t in (detection_tags or ()) if t) or set(sidecar.get("tags") or ())
     detection_tags = set(base_label(t) for t in detection_tags)
 
+    boxes = [(base_label(b["label"]), b["left"], b["top"], b["width"], b["height"])
+             for b in sidecar.get("boxes") or ()]
+    if verdict == "relabel":
+        boxes = relabel(boxes, labels, _config.known_classes())
+        if isinstance(boxes, str):
+            return (400, {"error": boxes})
+        detection_tags = set(b[0] for b in boxes)
+
     target_projects = _config.projects_for_tags(detection_tags)
     if not target_projects:
         logger.warning("No project matches tags %s on %s (%s), skipping upload",
@@ -644,10 +711,8 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
     except IOError as e:
         return (500, {"error": "failed to read file: %s" % e})
 
-    boxes = [(base_label(b["label"]), b["left"], b["top"], b["width"], b["height"])
-             for b in sidecar.get("boxes") or ()]
     width, height = sidecar.get("width"), sidecar.get("height")
-    if verdict == "correct" and not (boxes and width and height):
+    if verdict in ("correct", "relabel") and not (boxes and width and height):
         # Annotating "correct" with no geometry would file the frame as a
         # background example -- the opposite verdict. Fall back to the one
         # that asks a human instead of asserting the wrong thing.
@@ -683,7 +748,7 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
         if verdict == "flag" or not image_id:
             continue
         try:
-            if verdict == "correct":
+            if verdict in ("correct", "relabel"):
                 # Only this project's classes: a person+vehicle frame went to
                 # both projects with both boxes, adding a vehicle class to
                 # ipcams2 and a person class to packages-vehicles2.
@@ -720,6 +785,8 @@ def _do_upload(filename, model, cam, detection_tags, verdict=None):
     result = {"status": "uploaded", "file": filename, "projects": uploaded,
               "verdict": verdict, "images": images, "name": name, "cam": cam,
               "model": model}
+    if verdict == "relabel":
+        result["labels"] = sorted(detection_tags)
     if annotated:
         result["annotated"] = annotated
     if silenced:
@@ -751,8 +818,15 @@ def tap_message(code, result, filename):
     verdict = result.get("verdict", "flag")
     where = ", ".join(result.get("projects") or ()) or "nowhere"
     if result.get("status") == "changed":
-        was = {"correct": "confirmed", "false": "false", "flag": "flagged"}.get(
+        was = {"correct": "confirmed", "false": "nothing there", "flag": "flagged",
+               "relabel": "relabelled"}.get(
             result.get("was"), result.get("was"))
+        if verdict == "relabel":
+            line = "Changed from %s: relabelled %s in %s" % (
+                was, ", ".join(result.get("labels") or ()), where)
+            if result.get("unsilenced"):
+                line += "; unsilenced %s" % ", ".join(result["unsilenced"])
+            return line
         if verdict == "correct":
             line = "Changed from %s: confirmed in %s" % (was, where)
             if result.get("unsilenced"):
@@ -767,6 +841,8 @@ def tap_message(code, result, filename):
             was, where, "; ".join(parts) or "nothing to silence")
     if verdict == "correct":
         return "Confirmed, added to %s" % where
+    if verdict == "relabel":
+        return "Relabelled %s, added to %s" % (", ".join(result.get("labels") or ()), where)
     if verdict == "false":
         parts = []
         if result.get("silenced"):
@@ -777,7 +853,7 @@ def tap_message(code, result, filename):
                          % ", ".join(result["pending_exclusions"]))
         if not parts:
             parts.append("nothing to silence")
-        return "Marked false, %s in %s; %s" % ("background example", where,
+        return "Nothing there: %s in %s; %s" % ("null image", where,
                                                "; ".join(parts))
     return "Flagged for review, uploaded to %s" % where
 
@@ -875,7 +951,8 @@ def announce(code, result, filename):
 _TITLES = {
     "flag": "Image Flagged for Review",
     "correct": "Detections Confirmed",
-    "false": "Detections Marked False",
+    "false": "Nothing There",
+    "relabel": "Detections Relabelled",
 }
 
 

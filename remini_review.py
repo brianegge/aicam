@@ -78,6 +78,9 @@ class ReminiReviewConfig(object):
         # teacher's own text from that post; without one the header is just
         # "{name} {date}".
         self.digest_text = s.get("digest-text", "{name} {date}: {caption}")
+        # A school day with no photo of her (off sick, or none found) still gets
+        # the teacher's note: it carries the next day's plans (Brian, 2026-10-19).
+        self.note_text = s.get("note-text", "{name}'s class {date} (no photos of {name}): {caption}")
         self.train_on_confirm = s.getboolean("train-on-confirm", True)
         # "No" files the face here, so Frigate learns what not-her looks like. With
         # only adults beside her in the library, every unknown preschooler's
@@ -672,7 +675,7 @@ class ReminiReview(object):
                 groups.setdefault((m.get("date") or "", m.get("caption") or ""), []).append(m)
             # A day already in the chat gets "More of Chloe Oct 15", not the
             # teacher's note again.
-            shared_days = {m.get("date") for m in self._all() if m["state"] == "sent"}
+            shared_days = {m.get("date") for m in self._all() if m["state"] == "sent"} | self._noted()
             for chat in self.cfg.chats:
                 for (date, caption), items in groups.items():
                     header = "More of %s %s" % (self.cfg.name, pretty_date(date)) if date in shared_days \
@@ -725,6 +728,39 @@ class ReminiReview(object):
                                  "url": url[:512], "url_title": "Mark one as not %s" % self.cfg.name})
         except Exception:
             logger.warning("remini review: could not announce the batch", exc_info=True)
+
+    def _notes_path(self):
+        return os.path.join(self.cfg.dir, "notes-sent.txt")   # not .json: _all() reads those
+
+    def _noted(self):
+        try:
+            with open(self._notes_path()) as f:
+                return {l.strip() for l in f if l.strip()}
+        except OSError:
+            return set()
+
+    def send_note(self, date, caption):
+        """The teacher's note alone, for a day with no photo of her to share.
+        Once per day; skipped when the day already went out with photos. A photo
+        of her found later still goes out, headed "More of Chloe <day>"."""
+        if not date or not (caption or "").strip():
+            return 400, {"error": "date and caption are needed"}
+        with self.lock:
+            if date in self._noted():
+                return 200, {"sent": False, "why": "note already sent"}
+            if any(m.get("date") == date and m["state"] in ("sent", "confirmed", "pending")
+                   for m in self._all()):
+                return 200, {"sent": False, "why": "the day has photos of %s" % self.cfg.name}
+            if not self.cfg.chats:
+                return 200, {"sent": False, "why": "no chats configured"}
+            password = self._bluebubbles_password()
+            text = self.cfg.note_text.format(name=self.cfg.name, date=pretty_date(date), caption=caption.strip())
+            for chat in self.cfg.chats:
+                self._bb_text(chat, password, text)
+            with open(self._notes_path(), "a") as f:
+                f.write(date + "\n")
+        logger.info("remini review: sent the teacher's note for %s (no photos of %s)", date, self.cfg.name)
+        return 200, {"sent": True}
 
     def header(self, date, caption):
         text = self.cfg.digest_text.format(name=self.cfg.name, date=pretty_date(date),

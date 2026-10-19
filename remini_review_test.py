@@ -458,3 +458,26 @@ def test_classmate_names_label_the_boxes_and_the_buttons(tmp_path, monkeypatch):
                     train=False, faces=faces)
     assert "1 Adalynn" in written and "2" in written
     assert "fn=Adalynn%7C" in http.pushes[-1]["url"]
+
+
+def test_note_alone_for_a_day_without_her_once(tmp_path):
+    r, http, _ = make(tmp_path)
+    assert r.send_note("2026-10-19", "Happy Monday! Library tomorrow.") == (200, {"sent": True})
+    assert http.texts == [("any;-;me@example.com",
+                           "Chloe's class Oct 19 (no photos of Chloe): Happy Monday! Library tomorrow.")]
+    assert r.send_note("2026-10-19", "Happy Monday!")[1]["sent"] is False
+    assert len(http.texts) == 1 and not http.photos
+    assert r.send_note("2026-10-19", "")[0] == 400
+
+
+def test_note_skipped_when_the_day_has_her_and_later_photos_say_more_of(tmp_path):
+    r, http, clock = make(tmp_path)
+    cid = r.add_candidate(jpeg(), [1, 1, 80, 80], source="a", date="2026-10-20", caption="Hi")[1]["id"]
+    assert r.send_note("2026-10-20", "Hi")[1]["sent"] is False
+    r.confirm(cid, "no")
+    r.send_note("2026-10-19", "Note")
+    cid = r.add_candidate(jpeg(), [1, 1, 80, 80], source="b", date="2026-10-19", caption="Note")[1]["id"]
+    r.confirm(cid, "yes")
+    clock.t += 3600
+    r.send_digest()
+    assert http.texts[-1][1] == "More of Chloe Oct 19"

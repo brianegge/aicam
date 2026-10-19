@@ -399,3 +399,17 @@ def test_an_arriving_car_is_named_once(tmp_path):
     msg = _sent_message([_vehicle("AUDUSD"), _vehicle("AUDUSD")], tmp_path,
                         camera="garage-l")
     assert msg.count("AUDUSD") == 1 and " and " not in msg
+
+
+def test_the_review_link_carries_the_boxes_classes_for_relabelling():
+    from urllib.parse import urlparse, parse_qs
+    import configparser
+    c = configparser.ConfigParser()
+    c["roboflow"] = {"project.ipcams2": "dog,person", "project.pv2": "package,vehicle"}
+    boxes = [{"label": "person"}, {"label": "vehicle_road"}]
+    url = notify.review_page_url("https://ha/local/review.html", "abc.jpg", "driveway",
+                                 boxes, notify.review_classes(c))
+    q = parse_qs(urlparse(url).query)
+    assert q["boxes"] == ["person,vehicle"]
+    assert q["classes"] == ["dog,package,person,vehicle"]
+    assert "boxes" not in notify.review_page_url("https://ha/x", "abc.jpg", "deck")

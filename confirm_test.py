@@ -53,10 +53,22 @@ def test_fresh_ground_must_clear_every_earlier_box_not_just_the_first():
     assert not g.is_active("deer", _at(10))
 
 
-def test_another_camera_activates():
+def test_another_camera_does_not_activate():
+    """06:46 on 2026-10-19: a 0.72 "deer" fixed on the west lawn, then a stump
+    on the tree line for one frame. Each was the other's second sighting."""
     g = MovementGate({"deer"})
-    g.observe("deer", "tree line", _box(0.4, 0.4), _at(0))
-    assert g.observe("deer", "deck", _box(0.4, 0.4), _at(5))
+    g.observe("deer", "west lawn", _box(0.4, 0.4), _at(0))
+    assert not g.observe("deer", "tree line", _box(0.9, 0.25), _at(37))
+    assert not g.is_active("deer", _at(37), "tree line")
+    assert not g.is_active("deer", _at(37))
+
+
+def test_activation_is_per_camera():
+    g = MovementGate({"deer"})
+    g.observe("deer", "tree line", _box(0.1, 0.4), _at(0))
+    assert g.observe("deer", "tree line", _box(0.3, 0.4), _at(5))
+    assert g.is_active("deer", _at(5), "tree line")
+    assert not g.is_active("deer", _at(5), "deck")
 
 
 def test_a_sighting_outside_the_window_does_not_count():
@@ -66,14 +78,14 @@ def test_a_sighting_outside_the_window_does_not_count():
 
 
 def test_stays_active_while_sightings_continue_and_lapses_after_a_quiet_window():
-    g = MovementGate({"deer"}, window_seconds=60)
-    g.observe("deer", "tree line", _box(0.1, 0.4), _at(0))
+    g = MovementGate({"deer"})
+    g.observe("deer", "deck", _box(0.1, 0.4), _at(0))
     g.observe("deer", "deck", _box(0.4, 0.4), _at(5))
-    for s in range(50, 300, 50):
+    for s in range(10, 300, 50):
         g.observe("deer", "deck", _box(0.4, 0.4), _at(s))
-        assert g.is_active("deer", _at(s))
-    assert g.is_active("deer", _at(300 - 50 + 59))
-    assert not g.is_active("deer", _at(300 - 50 + 60))
+        assert g.is_active("deer", _at(s), "deck")
+    assert g.is_active("deer", _at(260 + 59), "deck")
+    assert not g.is_active("deer", _at(260 + 60), "deck")
 
 
 def test_classes_are_independent_and_ungated_ones_always_pass():
@@ -117,15 +129,16 @@ def test_a_held_track_is_announced_once_its_class_activates():
     assert "iou" in p3
 
 
-def test_a_track_held_on_one_camera_is_released_by_another():
+def test_a_track_held_on_one_camera_is_not_released_by_another():
     gate = MovementGate({"deer"})
     prev_a, prev_b = {}, {}
-    a0 = _pred("deer", _box(0.4, 0.4), cam="tree line")
+    a0 = _pred("deer", _box(0.4, 0.4), cam="west lawn")
     _frame(gate, prev_a, [a0], _at(0))
-    b0 = _pred("deer", _box(0.4, 0.4), cam="deck")
-    assert _frame(gate, prev_b, [b0], _at(3)) == [b0]
-    a1 = _pred("deer", _box(0.4, 0.4), cam="tree line")
-    assert _frame(gate, prev_a, [a1], _at(10)) == [a1]
+    b0 = _pred("deer", _box(0.9, 0.25), cam="tree line")
+    assert _frame(gate, prev_b, [b0], _at(37)) == []
+    a1 = _pred("deer", _box(0.4, 0.4), cam="west lawn")
+    assert _frame(gate, prev_a, [a1], _at(42)) == []
+    assert a1.get("unconfirmed")
 
 
 def test_ungated_classes_arrive_as_before():

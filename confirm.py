@@ -7,12 +7,19 @@ verify.py was paid for, a vision model threw those out. Without it they all
 alerted.
 
 So a class in [confirm] classes does not alert on its first sighting. It
-becomes *active* when a second sighting lands on fresh ground within the
-window: on a different camera, or on the same camera in a box that overlaps
-no earlier sighting there. A false positive sits in one place and keeps
-overlapping itself, so it never gets there. Once active, a class stays
-active until a whole window passes with no sighting of it at all, and every
-track of that class held back meanwhile is announced.
+becomes *active on a camera* when a second sighting on that camera lands on
+fresh ground within the window: a box that overlaps no earlier sighting there.
+A false positive sits in one place and keeps overlapping itself, so it never
+gets there. Once active, a class stays active on that camera until a whole
+window passes with no sighting of it there, and every track of that class
+held back on that camera meanwhile is announced.
+
+Another camera's sighting is not movement. It used to be: "a deer on the tree
+line and then the deck has moved". At 06:46 on 2026-10-19 the west lawn held
+a 0.72 "deer" that never left its box, and 37 s later the tree line scored a
+stump 0.65 for one frame; each was the other's second sighting, and the stump
+went out as "deer 65% near tree line". A real animal crossing from one camera
+to the next moves on each of them.
 
 Sightings in the same frame never confirm each other: two stones in one
 picture are not movement. Sightings only from the hysteresis hold do not
@@ -53,7 +60,7 @@ class MovementGate:
         self.window = timedelta(seconds=window_seconds)
         # class -> [(time, camera, box)], oldest first, pruned to the window
         self.sightings = {}
-        # class -> time of the sighting that activated it
+        # (class, camera) -> time of the sighting that activated it there
         self.activated = {}
 
     def gated(self, tag_name):
@@ -63,22 +70,24 @@ class MovementGate:
         kept = [s for s in self.sightings.get(tag_name, [])
                 if now - s[0] < self.window]
         self.sightings[tag_name] = kept
-        if not kept:
-            self.activated.pop(tag_name, None)
+        cameras = set(s[1] for s in kept)
+        for key in [k for k in self.activated
+                    if k[0] == tag_name and k[1] not in cameras]:
+            del self.activated[key]
         return kept
 
     def observe(self, tag_name, cam_name, box, now):
         """Record a sighting; True if this one activated the class."""
         if not self.gated(tag_name):
             return False
-        earlier = [s for s in self._prune(tag_name, now) if s[0] < now]
+        earlier = [s for s in self._prune(tag_name, now)
+                   if s[0] < now and s[1] == cam_name]
         self.sightings[tag_name].append((now, cam_name, dict(box)))
-        if tag_name in self.activated or not earlier:
+        if (tag_name, cam_name) in self.activated or not earlier:
             return False
-        if any(c == cam_name and bb_intersection_over_union(b, box) > 0
-               for _, c, b in earlier):
+        if any(bb_intersection_over_union(b, box) > 0 for _, _, b in earlier):
             return False
-        self.activated[tag_name] = now
+        self.activated[(tag_name, cam_name)] = now
         logger.info("%s confirmed by movement on %s (%d earlier sighting(s))",
                     tag_name, cam_name, len(earlier))
         return True
@@ -87,11 +96,14 @@ class MovementGate:
         limit = self.second_frame.get(p["tagName"])
         return limit is not None and (p.get("probability") or 0) < limit
 
-    def is_active(self, tag_name, now):
+    def is_active(self, tag_name, now, cam_name=None):
+        """Active on this camera; with no camera, on any."""
         if not self.gated(tag_name):
             return True
         self._prune(tag_name, now)
-        return tag_name in self.activated
+        if cam_name is None:
+            return any(k[0] == tag_name for k in self.activated)
+        return (tag_name, cam_name) in self.activated
 
 
 _gate = None
@@ -101,8 +113,8 @@ _gate_config = None
 def gate_for(config):
     """The process-wide gate, or None when [confirm] is not configured.
 
-    One gate for every camera: a deer seen on the tree line and then the
-    deck has moved, whichever camera saw it first.
+    One gate for every camera, holding each camera's sightings; a class is
+    confirmed per camera (see the module docstring).
     """
     global _gate, _gate_config
     if "confirm" not in config:
@@ -139,10 +151,11 @@ def release_absent(gate, tracks, present_ids, now):
     """
     released = []
     for tag_name, tag_tracks in tracks.items():
-        active = gate.gated(tag_name) and gate.is_active(tag_name, now)
         for t in tag_tracks:
             if not t.get("unconfirmed"):
                 continue
+            active = (gate.gated(tag_name)
+                      and gate.is_active(tag_name, now, t.get("camName")))
             if now - t.get("held_at", now) >= gate.window:
                 # Too old to announce, so stop holding a full-size frame for
                 # it -- a rock can stay held for hours.
@@ -181,7 +194,7 @@ def apply(gate, valid_predictions, new_predictions, tracked_pairs, now):
     for p in valid_predictions:
         track = track_of.get(id(p))
         if id(p) in new_ids:
-            if not gate.is_active(p["tagName"], now):
+            if not gate.is_active(p["tagName"], now, p["camName"]):
                 p["unconfirmed"] = True  # p is the new track itself
             elif gate.needs_second_frame(p):
                 p["unconfirmed"] = True
@@ -198,7 +211,7 @@ def apply(gate, valid_predictions, new_predictions, tracked_pairs, now):
                 p.pop("iou", None)
                 arrivals.append(p)
         elif track is not None and track.get("unconfirmed"):
-            if gate.is_active(p["tagName"], now):
+            if gate.is_active(p["tagName"], now, p["camName"]):
                 del track["unconfirmed"]
                 _drop_held_frame(track)
                 # notify() treats a matched track as already announced.

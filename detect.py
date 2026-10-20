@@ -113,6 +113,21 @@ def recently_seen(recent_objects, tag_name, now, hold_seconds=OBJECT_HOLD_SECOND
 SILENT_DEPARTURES = {"cat", "dog", "cat_road", "dog_road"}
 
 
+def counted(p, gate):
+    """Whether a prediction goes into the per-camera counts Home Assistant reads.
+
+    Not a borderline person still waiting for its second frame (confirm.py's
+    second_frame). The play camera scored the furled patio umbrella "person"
+    0.45-0.66 on 2026-10-20; the hold kept aicam quiet, but the count went
+    out, binary_sensor.person_outside turned on and the keypad chimed, five
+    times in half an hour. A movement-gated animal still counts while held:
+    Rufus's location reads the dog counts, and a held dog is usually a dog.
+    """
+    if not p.get("unconfirmed") or gate is None:
+        return True
+    return gate.gated(p["tagName"])
+
+
 def alert_text_predictions(predictions):
     """What the alert's text names: not what an earlier frame already ruled
     out. The parked cars in the garage carry priority -4 from the "vehicle in
@@ -675,7 +690,8 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         count = len(
             list(
                 filter(
-                    lambda p: p["tagName"] == o and (o != "package" or p["age"] > 0),
+                    lambda p: p["tagName"] == o and (o != "package" or p["age"] > 0)
+                    and counted(p, gate),
                     valid_predictions,
                 )
             )

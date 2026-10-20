@@ -523,3 +523,14 @@ def test_parked_cars_are_not_named_in_an_animal_alert():
     assert detect.alert_text_predictions([cat, parked]) == [cat]
     assert detect.alert_text_predictions([cat, parked, arriving]) == [cat, arriving]
     assert detect.alert_text_predictions([parked]) == [parked]
+
+
+def test_a_borderline_person_on_hold_is_not_counted():
+    """2026-10-20: the play camera's umbrella, "person" 0.66, held and never
+    alerted, still turned on binary_sensor.person_outside."""
+    from confirm import MovementGate
+    gate = MovementGate({"dog"}, second_frame={"person": 0.75})
+    assert not detect.counted({"tagName": "person", "unconfirmed": True}, gate)
+    assert detect.counted({"tagName": "person"}, gate)
+    assert detect.counted({"tagName": "dog", "unconfirmed": True}, gate)
+    assert detect.counted({"tagName": "person", "unconfirmed": True}, None)

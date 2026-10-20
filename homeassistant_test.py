@@ -128,3 +128,42 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def _ha_with(responses):
+    """A HomeAssistant whose state reads answer from a list, in order."""
+    ha = HomeAssistant.__new__(HomeAssistant)
+    ha.api = "http://ha/api/"
+    ha.headers = {}
+    ha.cache = {}
+    replies = iter(responses)
+
+    def get(url, **kwargs):
+        r = next(replies)
+        if isinstance(r, Exception):
+            raise r
+        resp = MagicMock()
+        resp.json.return_value = r
+        return resp
+    return ha, get
+
+
+def test_entity_not_found_does_not_replace_the_last_good_state():
+    """2026-10-20 09:24: Home Assistant starting up answered "Entity not found"."""
+    ha, get = _ha_with([{"state": "on"}, {"message": "Entity not found."}])
+    with patch("homeassistant.requests.get", side_effect=get):
+        assert ha.get_state("binary_sensor.is_dark") is True
+        assert ha.get_state("binary_sensor.is_dark") is True
+    assert ha.cache["binary_sensor.is_dark"] == {"state": "on"}
+
+
+def test_is_dark_with_nothing_known_falls_back_quietly_and_retries_soon():
+    import requests as rq
+    ha, get = _ha_with([rq.exceptions.ConnectionError("down"), {"state": "on"}])
+    with patch("homeassistant.requests.get", side_effect=get) as g:
+        assert ha.is_dark() is False
+        assert ha.is_dark() is False      # within the retry window: not asked
+        assert g.call_count == 1
+        ha._is_dark_cached = (False, ha._is_dark_cached[1]
+                              - __import__("datetime").timedelta(seconds=16))
+        assert ha.is_dark() is True

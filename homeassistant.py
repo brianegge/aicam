@@ -66,24 +66,24 @@ class HomeAssistant:
             raise KeyError('No such device "{}"'.format(name))
 
     def get_state(self, entity: str) -> bool:
+        # Only a reply with a state is worth keeping. While Home Assistant is
+        # starting it answers {"message": "Entity not found."} for entities it
+        # has not loaded yet, and that used to overwrite the last good answer
+        # in the cache -- so the one time the cache was needed, it held the
+        # error (2026-10-20 09:24, 57 failed is_dark reads in a row).
         try:
             response = requests.get(
                 f"{self.api}states/{entity}", headers=self.headers, timeout=10
             ).json()
+        except (requests.exceptions.RequestException, ValueError) as e:
+            response = {"error": str(e)}
+        if isinstance(response, dict) and "state" in response:
             self.cache[entity] = response
-        except requests.exceptions.RequestException:
-            if entity not in self.cache:
-                raise RuntimeError(
-                    f"Failed to fetch {self.api}states/{entity} and no cached response available"
-                )
-            log.warning(
-                f"Failed to fetch {self.api}states/{entity}. Using cached response"
-            )
-            response = self.cache[entity]
-        if "state" in response:
             return response["state"] == "on"
-        log.debug(response)
-        raise RuntimeError(f"Invalid response from entity {entity}={response}")
+        if entity not in self.cache:
+            raise RuntimeError(f"Invalid response from entity {entity}={response}")
+        log.warning(f"Failed to fetch {entity} ({response}). Using cached response")
+        return self.cache[entity]["state"] == "on"
 
     def set_input_boolean(self, switch: str, state: bool) -> requests.Response:
         json = {
@@ -193,6 +193,9 @@ class HomeAssistant:
     # sweep -- 15 cameras every few seconds would be ~5 requests/sec at Home
     # Assistant for a value that barely moves.
     IS_DARK_TTL_SECONDS = 60
+    # After a failed read with nothing to fall back on, how long before asking
+    # again. Without it every camera asked, and logged, on every sweep.
+    IS_DARK_RETRY_SECONDS = 15
 
     def is_dark(self) -> bool:
         now = datetime.datetime.now()
@@ -201,7 +204,18 @@ class HomeAssistant:
             value, fetched_at = cached
             if (now - fetched_at).total_seconds() < self.IS_DARK_TTL_SECONDS:
                 return value
-        value = self.get_state("binary_sensor.is_dark")
+        try:
+            value = self.get_state("binary_sensor.is_dark")
+        except RuntimeError as e:
+            # Nothing known yet -- aicam started while Home Assistant was
+            # down. Daytime thresholds, as detect() always fell back to, but
+            # said once and retried shortly rather than per camera per sweep.
+            log.warning("Could not read is_dark (%s); daytime thresholds for %ds",
+                        e, self.IS_DARK_RETRY_SECONDS)
+            retry_at = now - datetime.timedelta(
+                seconds=self.IS_DARK_TTL_SECONDS - self.IS_DARK_RETRY_SECONDS)
+            self._is_dark_cached = (False, retry_at)
+            return False
         self._is_dark_cached = (value, now)
         return value
 

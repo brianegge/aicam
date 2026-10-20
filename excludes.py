@@ -48,7 +48,8 @@ def _as_box(d):
 
 
 def _stale(doc, models, labels_by_model):
-    """True when a provisional exclusion's model set no longer applies.
+    """True when a provisional exclusion has not been rechecked against the
+    models running now.
 
     With labels_by_model, only the model that produces the label counts: a
     vehicle-model swap on 2026-10-03 re-armed 55 animal and person exclusions
@@ -69,15 +70,16 @@ def load_dir(path, models=None, labels_by_model=None):
 
     `models` is the set of model files aicam is running right now. A
     provisional exclusion -- one written from a phone tap rather than from an
-    archive audit -- names the models it was created against and stops applying
-    the moment that set changes. That is what "silence it until the model
-    learns" means in practice: the tap also uploads the frame to Roboflow as a
-    background example, so the next retrain is the thing that should have fixed
-    it, and the retrain is what puts the blind spot back on trial. If the rock
-    still reads as a rabbit, the next alert says so and costs one more tap.
+    archive audit -- names the models it was created against. When that set
+    changes it stays in force and is logged as awaiting a recheck: the saved
+    frame is the evidence, and recheck_excludes.py --apply replays it through
+    the new model, retires the exclusion only if the false positive is gone,
+    and re-stamps it with the new models if not. Until 2026-10-20 a model
+    change dropped it unseen, which re-armed every false positive the retrain
+    had not fixed.
 
     `labels_by_model` maps each running model file to its class names, so that
-    retraining one model leaves the exclusions against the other in force.
+    retraining one model does not flag the exclusions against the other.
 
     Passing models=None applies them regardless, which is what a tool that only
     wants to read the geometry (recheck_excludes.py) should get.
@@ -101,12 +103,12 @@ def load_dir(path, models=None, labels_by_model=None):
             if doc.get("provisional") and models is not None:
                 was = set(doc.get("models") or ())
                 if _stale(doc, models, labels_by_model):
-                    logger.info(
+                    logger.warning(
                         "provisional exclusion %s was written against %s and the "
-                        "models are now %s; letting it fire again",
+                        "models are now %s; still in force until "
+                        "recheck_excludes.py --apply replays it",
                         os.path.basename(fn), ", ".join(sorted(was)) or "nothing",
                         ", ".join(sorted(models)))
-                    continue
             camera = doc["camera"]
             label = doc["label"]
             box = _as_box(doc["box"])

@@ -155,10 +155,10 @@ class TestSilencing:
     """"All false" has to stop the false positive, not just file a note.
 
     A rock called a rabbit goes on being a rabbit every three seconds until
-    something suppresses it, so the tap writes a live exclusion. What keeps
-    that from being reckless is that it expires on its own: the file names the
-    models it was written against, and excludes.load_dir drops it the moment
-    that set changes.
+    something suppresses it, so the tap writes a live exclusion. The file
+    names the models it was written against, so after a retrain
+    recheck_excludes.py --apply can replay its frame and retire it only if
+    the new model no longer fires.
     """
 
     def test_false_silences_the_spot_now(self, review, api):
@@ -185,12 +185,12 @@ class TestSilencing:
                                    ["ipcams_v32.onnx", "packages_v11.onnx"])
         assert loaded["peach tree"]["*"][0]["left"] == 0.1
 
-    def test_a_retrain_puts_the_blind_spot_back_on_trial(self, review, api):
-        """The whole expiry rule: a new model set means it stops applying."""
+    def test_a_retrain_alone_does_not_lift_the_silence(self, review, api):
+        """Retired only after its saved frame is replayed (recheck_excludes)."""
         import excludes
         roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
         assert excludes.load_dir(roboflow_upload._config.auto_dir,
-                                 ["ipcams_v33.onnx", "packages_v11.onnx"]) == {}
+                                 ["ipcams_v33.onnx", "packages_v11.onnx"])["peach tree"]
 
     def test_the_frame_is_paired_with_the_geometry(self, review, api):
         """recheck_excludes.py replays the jpg; delete-after-upload eats the original."""

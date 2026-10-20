@@ -337,13 +337,12 @@ def current_models(config_path):
 
 _PROVISIONAL_HEAD = """# PROVISIONAL -- written by an "all false" tap on %(created)s, from one frame.
 # It suppresses anything at this spot right now -- it was seen as %(label)s,
-# and the label is "*" because one rock reads as any number of classes --
-# and stops the moment the
-# model set changes: the same tap uploaded the frame to Roboflow as a
-# background example, so the next retrain is what should make it unnecessary,
-# and excludes.load_dir drops this file as soon as the models it names are no
-# longer the ones running. If the false positive comes back after a retrain,
-# that is the honest answer -- tap it again.
+# and the label is "*" because one rock reads as any number of classes.
+# The same tap uploaded the frame to Roboflow as a background example, so the
+# next retrain should make it unnecessary -- but a retrain alone does not lift
+# it. It stays in force until recheck_excludes.py --apply replays the frame
+# below through the new model: retired if the false positive is gone,
+# re-stamped with the new models if not.
 #
 # To make it permanent, audit the box against the capture archive by IoU, take
 # the median of the hits rather than this one box, pair it with the highest
@@ -459,8 +458,9 @@ def silence(cam, filename, box, model, image_bytes):
     There is no count per camera either. There was (8), and the peach tree
     reached it in three days, after which four taps were confirmed as "held
     back, not silenced" and kept firing. What bounds a blind spot is expiry:
-    each exclusion carries the models it was written against, so a retrain
-    drops them all and recheck_excludes.py says which are still needed.
+    each exclusion carries the models it was written against and its frame,
+    and after a retrain recheck_excludes.py --apply retires the ones the new
+    model no longer fires on.
     """
     existing = already_silenced(_config.auto_dir, cam, box)
     if existing:

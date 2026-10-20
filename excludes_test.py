@@ -114,10 +114,12 @@ def test_a_provisional_exclusion_applies_while_its_models_are_running(tmp_path):
     assert got["peach tree"]["rabbit"][0]["left"] == 0.1
 
 
-def test_a_retrain_puts_a_provisional_exclusion_back_on_trial(tmp_path):
-    """"Until the model learns" is exactly this: a new model set drops it."""
+def test_a_retrain_leaves_a_provisional_exclusion_in_force_until_rechecked(tmp_path):
+    """A new model set is not evidence the false positive is gone; replaying
+    the saved frame is (recheck_excludes.py --apply)."""
     write(tmp_path, "peach_tree-rabbit-11-22.yaml", PROVISIONAL)
-    assert excludes.load_dir(str(tmp_path), ["ipcams_v33.onnx", "packages_v11.onnx"]) == {}
+    got = excludes.load_dir(str(tmp_path), ["ipcams_v33.onnx", "packages_v11.onnx"])
+    assert got["peach tree"]["rabbit"]
 
 
 LABELS = {"ipcams_v32.onnx": {"rabbit", "dog", "person"},
@@ -131,17 +133,17 @@ def test_retraining_the_vehicle_model_leaves_animal_exclusions_alone(tmp_path):
     assert got["peach tree"]["rabbit"]
 
 
-def test_retraining_the_model_that_saw_it_still_rearms_it(tmp_path):
-    write(tmp_path, "peach_tree-rabbit-11-22.yaml", PROVISIONAL)
+def test_retraining_the_model_that_saw_it_flags_it_for_recheck(tmp_path):
     labels = {"ipcams_v33.onnx": LABELS["ipcams_v32.onnx"],
               "packages_v11.onnx": LABELS["packages_v13.onnx"]}
-    assert excludes.load_dir(str(tmp_path), ["ipcams_v33.onnx", "packages_v11.onnx"], labels) == {}
+    doc = {"seen_as": "rabbit", "models": ["ipcams_v32.onnx", "packages_v11.onnx"]}
+    assert excludes._stale(doc, ["ipcams_v33.onnx", "packages_v11.onnx"], labels)
 
 
-def test_a_package_exclusion_rearms_when_the_vehicle_model_changes(tmp_path):
-    write(tmp_path, "garage-package-11-22.yaml", PROVISIONAL.replace(
-        "label: rabbit", "label: \"*\"\n    seen_as: package"))
-    assert excludes.load_dir(str(tmp_path), ["ipcams_v32.onnx", "packages_v13.onnx"], LABELS) == {}
+def test_a_package_exclusion_is_flagged_when_the_vehicle_model_changes(tmp_path):
+    doc = {"label": "*", "seen_as": "package",
+           "models": ["ipcams_v32.onnx", "packages_v11.onnx"]}
+    assert excludes._stale(doc, ["ipcams_v32.onnx", "packages_v13.onnx"], LABELS)
 
 
 def test_road_variants_belong_to_the_model_that_saw_the_base_class(tmp_path):

@@ -190,21 +190,21 @@ file in it. `main.py` re-reads both directories when any `*.yaml` mtime changes
 (`EXCLUDES_RELOAD_SECONDS`, 10 s), so the silence takes effect within a sweep
 instead of at the next restart.
 
-It expires by itself. The file carries `provisional: true` and the `models:`
-it was written against, and `excludes.load_dir` drops it as soon as
-`config.txt` names a different model set — the same tap uploaded the frame to
-Roboflow as a background example, so a retrain is what should have made it
-unnecessary, and the retrain is what puts the blind spot back on trial. After
-one:
+It is retired by a recheck, not by a retrain. The file carries
+`provisional: true` and the `models:` it was written against. When
+`config.txt` names a different model set it **stays in force**, and
+`excludes.load_dir` logs a warning that it is awaiting a recheck (until
+2026-10-20 a model change dropped it unseen). After deploying a new model:
 
 ```bash
-ssh openclaw.home "cd ~/aicam && .venv/bin/python recheck_excludes.py \
-    --config config.txt --dir ~/aicam-data/capture/excludes-auto"
+ssh claw@192.168.251.2 "cd ~/aicam && .venv/bin/python recheck_excludes.py \
+    --config config.txt --dir ~/aicam-data/capture/excludes-auto --apply"
 ```
 
-STILL NEEDED means audit it properly and move the pair into `excludes/` without
-the provisional keys. If the false positive simply comes back, that is the
-honest answer and it costs one more tap.
+It replays each saved frame through the running models. RETIRE moves the pair
+to `excludes-auto/retired-YYYYMMDD/` (not loaded, evidence kept); STILL NEEDED
+re-stamps `models:` with the running set. Without `--apply` it only reports,
+and it never moves anything in `excludes/` (version-controlled, audited).
 
 There is **no size guard** (there was one, 2% of the frame, removed
 2026-10-20: it held back the play camera's patio furniture, which kept
@@ -214,8 +214,8 @@ candidates from before then and is not loaded (`load_dir` does not recurse).
 
 There is **no per-camera count** (there was one, 8, removed 2026-10-01: the
 peach tree hit it in three days and taps stopped working there). The
-retrain is the limit — every tap-made exclusion expires with the model it was
-written against, and `recheck_excludes.py` above sorts what is still needed.
+recheck is the limit — after each retrain, `recheck_excludes.py --apply` above
+retires every tap-made exclusion the new model has learned.
 
 A second tap on the same spot is recognised (IoU > 0.5, the same threshold
 `detect.py` suppresses at) and does not write a second file.

@@ -13,18 +13,33 @@ configured to use right now, and asks: does the false positive still happen?
     RETIRE        the model no longer fires -- delete the pair, or set
                   disabled: true in the yaml to keep the evidence
 
-It never edits anything; retiring is left to a human because a single frame is
-weak evidence and the surrounding scene may have changed.
+By default it only reports. With --apply it acts on provisional exclusions --
+the ones a phone tap wrote -- and only those:
+
+    RETIRE        the pair moves to retired-YYYYMMDD/ beside them, which
+                  nothing loads, so the evidence is kept
+    STILL NEEDED  `models:` is re-stamped with the set running now, which
+                  records that it was rechecked against them
+
+This is the step a retrain needs before anything stops being suppressed: a
+model change leaves every provisional exclusion in force (excludes.load_dir
+logs it as awaiting a recheck) until this has replayed its frame. Hand-written
+exclusions in excludes/ are under version control and are only reported.
+Unrecheckable ones (no frame) are left in force.
 
     python3 recheck_excludes.py --config config.txt
     python3 recheck_excludes.py --config config.txt --only peach_tree
+    python3 recheck_excludes.py --config config.txt \
+        --dir ~/aicam-data/capture/excludes-auto --apply
 """
 
 import argparse
 import configparser
+import datetime
 import glob
 import json
 import os
+import shutil
 import sys
 
 import cv2
@@ -73,6 +88,52 @@ def matches(preds, label, box, iou=0.5):
             and bb_intersection_over_union(box, p["boundingBox"]) > iou]
 
 
+def running_models(cfg):
+    """Model files aicam is running, as a provisional exclusion names them."""
+    return sorted(os.path.basename(cfg[section]["onnx"])
+                  for section in ("color-model", "grey-model", "vehicle-model")
+                  if cfg.has_option(section, "onnx"))
+
+
+def retire_pair(yaml_path, today=None):
+    """Move an exclusion pair into retired-YYYYMMDD/ beside it; return the dir.
+
+    load_dir does not recurse, so this stops it suppressing anything while the
+    frame and the geometry stay where a second look can find them.
+    """
+    today = today or datetime.date.today()
+    dest = os.path.join(os.path.dirname(yaml_path), "retired-%s" % today.strftime("%Y%m%d"))
+    os.makedirs(dest, exist_ok=True)
+    stem = os.path.splitext(yaml_path)[0]
+    for ext in (".yaml", ".jpg"):
+        if os.path.exists(stem + ext):
+            shutil.move(stem + ext, os.path.join(dest, os.path.basename(stem) + ext))
+    return dest
+
+
+def restamp(yaml_path, models):
+    """Rewrite the `models:` list in place, keeping every other line.
+
+    Text, not a yaml round trip: the files open with a comment block saying
+    what they are and how to audit them, and yaml.safe_dump would drop it.
+    """
+    with open(yaml_path) as f:
+        lines = f.read().splitlines()
+    out, skipping = [], False
+    for line in lines:
+        if line.startswith("models:"):
+            skipping = True
+            continue
+        if skipping and line.startswith((" ", "-")):
+            continue
+        skipping = False
+        out.append(line)
+    out.append("models:")
+    out.extend("  - %s" % m for m in models)
+    with open(yaml_path, "w") as f:
+        f.write("\n".join(out) + "\n")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -81,6 +142,9 @@ def main():
     ap.add_argument("--only", default=None, help="substring filter on the filename")
     ap.add_argument("--iou", type=float, default=0.5,
                     help="overlap at which a detection counts as the same false positive")
+    ap.add_argument("--apply", action="store_true",
+                    help="retire provisional exclusions the model no longer fires on, "
+                         "and re-stamp the rest with the running models")
     args = ap.parse_args()
 
     cfg = configparser.ConfigParser()
@@ -99,6 +163,7 @@ def main():
     color_model = load_model(cfg["color-model"], ipcams_labels, False)
     vehicle_model = load_model(cfg["vehicle-model"], vehicle_labels, False)
     set_model_input_sizes(color_model, vehicle_model)
+    models = running_models(cfg)
 
     # Thresholds aicam actually acts on -- an exclusion only matters if the
     # detection would have been reported.
@@ -145,13 +210,18 @@ def main():
         shown = best["tagName"] if (best and wildcard) else label
         thr = thresholds.get(best["tagName"] if best else label, default_threshold)
 
+        act = args.apply and doc.get("provisional")
         if hit:
-            print("%-34s %-9s %7.2f  STILL NEEDED (threshold %.2f)"
-                  % (stem, shown, hit["probability"], thr))
+            print("%-34s %-9s %7.2f  STILL NEEDED (threshold %.2f)%s"
+                  % (stem, shown, hit["probability"], thr,
+                     " -- re-stamped" if act else ""))
+            if act:
+                restamp(fn, models)
             needed += 1
         else:
-            print("%-34s %-9s %7.2f  RETIRE -- no longer detected above %.2f"
-                  % (stem, shown, best["probability"] if best else 0.0, thr))
+            print("%-34s %-9s %7.2f  RETIRE -- no longer detected above %.2f%s"
+                  % (stem, shown, best["probability"] if best else 0.0, thr,
+                     " -- moved to %s" % os.path.basename(retire_pair(fn)) if act else ""))
             retire += 1
 
     print("\n%d still needed, %d can be retired, %d unrecheckable" % (needed, retire, missing))

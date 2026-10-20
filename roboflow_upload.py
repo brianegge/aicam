@@ -60,11 +60,11 @@ class Config(object):
         # file in the repo. aicam loads this directory too.
         self.auto_dir = config["detector"].get(
             "excludes-auto-dir", os.path.join(self.save_path, "excludes-auto"))
-        # Where a tap lands when the guard says the box is too big to silence.
+        # Candidates held back by the size guard, before it was removed on
+        # 2026-10-20. Nothing writes here now; unsilence still clears it.
         # load_dir globs *.yaml and does not recurse, so nothing here
         # suppresses anything.
         self.pending_dir = os.path.join(self.auto_dir, "pending")
-        self.max_exclusion_area = section.getfloat("auto-exclude-max-area", 0.02)
         self.config_path = None
         # A tap gets no answer from Home Assistant: a webhook automation
         # returns an empty body whatever it does (verified against 2026.9.2
@@ -449,27 +449,19 @@ def already_silenced(directory, cam, box):
 def silence(cam, filename, box, model, image_bytes):
     """Act on "all false": stop this false positive firing, or say why not.
 
-    Returns (stem, live) -- live is False when a guard sent it to pending/
-    instead. The guard is the reason this is not just a file write. An
-    exclusion is a blind spot, and one tap is one frame of evidence: a box
-    covering a quarter of the frame is more likely a detector having a bad day
-    than a rock, and silencing it would cost real detections that nobody would
-    notice going missing.
+    Returns (stem, live); live is always True now. There is no guard: the
+    tap is the decision, and it holds until the retrain. There was a size
+    cap (2% of the frame), and on 2026-10-20 it held back covered patio
+    furniture on the play camera that read as a person every 30-60 s and
+    chimed the keypad each time -- after the tap that should have stopped
+    it.
 
-    There is no count per camera. There was (8), and the peach tree reached it
-    in three days, after which four taps -- coyote, dog_road, rabbit, raccoon
-    -- were confirmed as "held back, not silenced" and kept firing. Small
-    spots are cheap, and they expire on their own: each carries the models it
-    was written against, so a retrain drops them all and recheck_excludes.py
-    says which are still needed.
+    There is no count per camera either. There was (8), and the peach tree
+    reached it in three days, after which four taps were confirmed as "held
+    back, not silenced" and kept firing. What bounds a blind spot is expiry:
+    each exclusion carries the models it was written against, so a retrain
+    drops them all and recheck_excludes.py says which are still needed.
     """
-    area = float(box.get("width", 0)) * float(box.get("height", 0))
-    if area > _config.max_exclusion_area:
-        return (write_exclusion(
-            _config.pending_dir, cam, filename, box, box.get("probability"),
-            model, image_bytes,
-            why="the box covers %.1f%% of the frame, over the %.1f%% a tap may silence"
-                % (area * 100, _config.max_exclusion_area * 100)), False)
     existing = already_silenced(_config.auto_dir, cam, box)
     if existing:
         logger.info("%s on %s is already silenced by %s", box.get("label"), cam, existing)

@@ -213,28 +213,20 @@ class TestSilencing:
 
 
 class TestSilencingGuards:
-    """One tap is one frame of evidence, and an exclusion is a blind spot."""
+    """No guard holds a tap back; expiry with the model set is the limit."""
 
-    def test_a_box_too_big_to_silence_is_held_back(self, review, api):
-        _rewrite_boxes(review, [{"label": "deer", "left": 0.1, "top": 0.1,
-                                 "width": 0.5, "height": 0.5, "probability": 0.6}])
-        code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
-        assert not result.get("silenced")
-        assert result["pending_exclusions"] == ["peach_tree-deer-35-35"]
-        assert not os.path.isdir(roboflow_upload._config.auto_dir) or \
-            [f for f in os.listdir(roboflow_upload._config.auto_dir)
-             if f.endswith(".yaml")] == []
-        doc = open(os.path.join(roboflow_upload._config.pending_dir,
-                                "peach_tree-deer-35-35.yaml")).read()
-        assert "25.0% of the frame" in doc and "provisional" not in doc
-
-    def test_a_held_back_candidate_suppresses_nothing(self, review, api):
+    def test_a_big_box_is_silenced_too(self, review, api):
+        """The play camera's patio furniture: 2.5% of the frame, held back by
+        the old 2% cap, and it went on chiming the keypad after the tap."""
         import excludes
         _rewrite_boxes(review, [{"label": "deer", "left": 0.1, "top": 0.1,
                                  "width": 0.5, "height": 0.5, "probability": 0.6}])
-        roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
-        # pending/ is a subdirectory and load_dir does not recurse.
-        assert excludes.load_dir(roboflow_upload._config.auto_dir, ["ipcams_v32.onnx"]) == {}
+        code, result = roboflow_upload._do_upload("abc123.jpg|false", "", "", set())
+        assert result["silenced"] == ["peach_tree-deer-35-35"]
+        assert not result.get("pending_exclusions")
+        loaded = excludes.load_dir(roboflow_upload._config.auto_dir,
+                                   ["ipcams_v32.onnx", "packages_v11.onnx"])
+        assert loaded["peach tree"]["*"][0]["width"] == 0.5
 
     def test_a_camera_may_collect_any_number(self, review, api):
         """The peach tree reached the old cap of 8 in three days."""

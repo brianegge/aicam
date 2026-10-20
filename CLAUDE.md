@@ -206,12 +206,11 @@ STILL NEEDED means audit it properly and move the pair into `excludes/` without
 the provisional keys. If the false positive simply comes back, that is the
 honest answer and it costs one more tap.
 
-One guard, landing in `excludes-auto/pending/` (not loaded — `load_dir`
-does not recurse) with the reason written into the file:
-
-- `auto-exclude-max-area` (default 0.02) — a box over 2% of the frame is more
-  likely a detector having a bad day than a rock, and silencing it would cost
-  real detections nobody would notice going missing.
+There is **no size guard** (there was one, 2% of the frame, removed
+2026-10-20: it held back the play camera's patio furniture, which kept
+chiming the keypad as a person after it was tapped false). A tap is live
+immediately, whatever the box size. `excludes-auto/pending/` holds only
+candidates from before then and is not loaded (`load_dir` does not recurse).
 
 There is **no per-camera count** (there was one, 8, removed 2026-10-01: the
 peach tree hit it in three days and taps stopped working there). The

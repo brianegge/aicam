@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<!--
+  "Is this <classmate>?" -- see remini_review.py (add_whois). The Pushover
+  picture shows the child's reference face on the left and faces the
+  preschool model thinks are them on the right. ?file=<question>&name=<child>&n=<faces>.
+  A button calls the aicam_roboflow_review webhook with model=whois,
+  file=<question>, cam=yes|no|unsure.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Who is this?</title>
+<style>
+ :root { color-scheme: dark; }
+ body{font-family:-apple-system,system-ui,sans-serif;max-width:520px;
+      margin:0 auto;padding:24px 16px 40px;background:#111;color:#eee}
+ h1{font-size:22px;font-weight:600;margin:0 0 6px}
+ .sub{color:#999;font-size:14px;margin:0 0 22px;line-height:1.4}
+ button{display:block;width:100%;padding:20px;margin:12px 0;font-size:19px;
+        font-weight:600;border:0;border-radius:12px;color:#fff;
+        -webkit-tap-highlight-color:transparent}
+ .yes{background:#16a34a} .no{background:#4b5563}
+ button:disabled{opacity:.4}
+ #out{margin-top:20px;padding:14px;border-radius:10px;background:#1c1c1e;
+      font-size:15px;color:#ddd;display:none}
+</style>
+</head>
+<body>
+<h1 id="q">Is this them?</h1>
+<p class="sub" id="sub"></p>
+<button class="yes" data-a="yes" id="yes">Yes</button>
+<button class="no" data-a="no" id="no">No</button>
+<button class="no" data-a="unsure">Not sure</button>
+<div id="out"></div>
+<script>
+ var q = new URLSearchParams(location.search);
+ var file = q.get("file") || "", name = q.get("name") || "them", n = parseInt(q.get("n") || "1", 10);
+ document.getElementById("q").textContent = "Is this " + name + "?";
+ document.getElementById("sub").textContent = n > 1
+   ? "Left is " + name + ". Are all " + n + " faces on the right " + name + "? If any one is someone else, answer No."
+   : "Left is " + name + ". Is the face on the right " + name + " too?";
+ document.getElementById("yes").textContent = n > 1 ? "Yes, all " + name : "Yes, " + name;
+ document.getElementById("no").textContent = n > 1 ? "No, not all of them" : "No, someone else";
+ var out = document.getElementById("out");
+ function say(t) { out.textContent = t; out.style.display = "block"; }
+ function all(d) { var b = document.querySelectorAll("button"); for (var i = 0; i < b.length; i++) b[i].disabled = d; }
+ function answer(a) {
+   if (!file) { say("No question in the link."); return; }
+   all(true); say("Sending…");
+   fetch(location.origin + "/api/webhook/aicam_roboflow_review?model=whois&file="
+         + encodeURIComponent(file) + "&cam=" + encodeURIComponent(a))
+     .then(function (r) { say(r.ok ? "Thanks, noted." : "Home Assistant answered " + r.status + "."); if (!r.ok) all(false); })
+     .catch(function (e) { say("Could not reach Home Assistant: " + e); all(false); });
+ }
+ document.addEventListener("click", function (e) { if (e.target.dataset && e.target.dataset.a) answer(e.target.dataset.a); });
+</script>
+</body>
+</html>

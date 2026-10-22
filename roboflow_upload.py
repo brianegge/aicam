@@ -871,7 +871,19 @@ def _do_remini(filename, answer):
     return code, result
 
 
+def _do_whois(qid, answer):
+    """A tap from whois.html: model=whois, file=<question>, cam=yes|no|unsure."""
+    if _remini is None:
+        code, result = 404, {"error": "Remini review is not configured here"}
+    else:
+        code, result = _remini.answer_whois(qid, answer)
+    result["remini"] = True
+    return code, result
+
+
 def _route_tap(filename, model, cam, detection_tags, verdict):
+    if model == "whois":
+        return _do_whois(filename, cam)
     if model == "face":
         return _do_face(filename, cam, train="notrain" not in (detection_tags or ()))
     if model == "remini":
@@ -954,6 +966,12 @@ class UploadHandler(BaseHTTPRequestHandler):
         if parsed.path == "/health":
             self._respond(200, {"status": "ok"})
             return
+        if parsed.path == "/remini/whois/labels":
+            if _remini is None:
+                self._respond(404, {"error": "Remini review is not configured here"})
+            else:
+                self._respond(200, _remini.whois_labels())
+            return
         if parsed.path == "/remini/labels":
             # Read-only, LAN-side: remini-chloe on ubuntu24 trains its face model
             # from these answers.
@@ -981,7 +999,7 @@ class UploadHandler(BaseHTTPRequestHandler):
         detection_tags = set(tags_str.split(",")) if tags_str else set()
         verdict = params.get("v", [None])[0]
 
-        if model in ("face", "remini"):
+        if model in ("face", "remini", "whois"):
             code, result = _route_tap(filename, model, cam, detection_tags, verdict)
             announce(code, result, filename)
             self._respond(code, result)
@@ -1055,6 +1073,9 @@ class UploadHandler(BaseHTTPRequestHandler):
         if self.path == "/remini/noface":
             self._remini_noface()
             return
+        if self.path == "/remini/whois":
+            self._remini_whois()
+            return
         if self.path == "/remini/note":
             self._remini_note()
             return
@@ -1101,6 +1122,19 @@ class UploadHandler(BaseHTTPRequestHandler):
         self._respond(*_remini.add_noface(image, body.get("source"), body.get("date"),
                                           body.get("caption"), share=body.get("share", True),
                                           faces=body.get("faces")))
+
+    def _remini_whois(self):
+        """From remini-chloe: {image: base64 jpeg, name, count, ref} -- "Is this <name>?"."""
+        if _remini is None:
+            self._respond(404, {"error": "Remini review is not configured here"})
+            return
+        try:
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
+            image = base64.b64decode(body["image"])
+        except (KeyError, ValueError, TypeError) as e:
+            self._respond(400, {"error": "bad question: %s" % e})
+            return
+        self._respond(*_remini.add_whois(image, body.get("name"), body.get("count"), body.get("ref")))
 
     def _remini_note(self):
         """From remini-chloe: {date, caption} for a school day with no photo of her."""

@@ -99,6 +99,7 @@ class ReminiReviewConfig(object):
         # still asked. auto-share-min keeps a floor on the face score.
         self.auto_share = s.getboolean("auto-share-faces", False)
         self.auto_share_min = s.getfloat("auto-share-min", 0.0)
+        self.whois_url = s.get("whois-page-url", self.page_url.replace("remini-review.html", "whois.html"))
         self.sent_page_url = s.get("sent-page-url", self.page_url.replace("remini-review.html", "remini-sent.html"))
         # Photos with no detectable face go to a vision model (aicam's
         # [verify] OpenRouter account) with a contact sheet of the day's
@@ -530,6 +531,88 @@ class ReminiReview(object):
                 row["faces"] = [f["box"] for f in m.get("faces") or []]
                 out.append(row)
         return out
+
+    # ------------------------------------------------------------------ who is this
+    # "Is this <classmate>?" (2026-10-21), like Apple Photos asking whether two
+    # faces are the same person. remini-chloe builds the picture (the child's
+    # reference face beside a group of faces its model thinks are them) and
+    # learns from the answer; this side only asks and records. Kept apart
+    # from the candidates (own directory) so nothing here is shared or digested.
+    WHOIS_ANSWERS = ("yes", "no", "unsure")
+
+    def _whois_dir(self):
+        d = os.path.join(self.cfg.dir, "whois")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def _whois_load(self, qid):
+        try:
+            with open(os.path.join(self._whois_dir(), qid + ".json")) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+
+    def _whois_save(self, meta):
+        path = os.path.join(self._whois_dir(), meta["id"] + ".json")
+        with open(path + ".tmp", "w") as f:
+            json.dump(meta, f, indent=1, sort_keys=True)
+        os.replace(path + ".tmp", path)
+
+    def _whois_all(self):
+        d = self._whois_dir()
+        return [m for m in (self._whois_load(fn[:-5]) for fn in sorted(os.listdir(d)) if fn.endswith(".json")) if m]
+
+    def add_whois(self, image_bytes, name, count=1, ref=None):
+        """Store and ask one "Is this <name>?" question. `ref` is remini-chloe's own
+        id for it, so a resend is recognised. Returns (code, result)."""
+        if not name or not image_bytes:
+            return 400, {"error": "name and image are needed"}
+        qid = "whois-" + hashlib.sha1(("%s|%s" % (ref, name)).encode() if ref else image_bytes).hexdigest()[:12]
+        with self.lock:
+            if self._whois_load(qid):
+                return 200, {"id": qid, "status": "already"}
+            with open(os.path.join(self._whois_dir(), qid + ".jpg"), "wb") as f:
+                f.write(image_bytes)
+            meta = {"id": qid, "name": name, "count": int(count or 1), "ref": ref,
+                    "state": "pending", "added": self.now()}
+            self._whois_save(meta)
+        if self.cfg.pushover:
+            token, user = self.cfg.pushover
+            page = self.cfg.whois_url + ("&" if "?" in self.cfg.whois_url else "?") + \
+                urlencode({"file": qid, "name": name, "n": meta["count"]}, quote_via=quote)
+            faces = "this face" if meta["count"] == 1 else "these %d faces" % meta["count"]
+            try:
+                r = self.http.post("https://api.pushover.net/1/messages.json", timeout=30, data={
+                    "token": token, "user": user, "title": "Is this %s?" % name,
+                    "message": "Left: %s. Right: %s from Remini." % (name, faces),
+                    "priority": 0, "url": page, "url_title": "Yes / No"},
+                    files={"attachment": ("whois.jpg", image_bytes, "image/jpeg")})
+                r.raise_for_status()
+                logger.info("remini review: asked whether %d face(s) are %s (%s)", meta["count"], name, qid)
+            except requests.RequestException:
+                logger.warning("remini review: could not ask %s", qid, exc_info=True)
+        return 200, {"id": qid, "status": "pending"}
+
+    def answer_whois(self, qid, answer):
+        if answer not in self.WHOIS_ANSWERS:
+            return 400, {"error": "answer is one of %s" % ", ".join(self.WHOIS_ANSWERS)}
+        with self.lock:
+            meta = self._whois_load(qid)
+            if not meta:
+                return 404, {"error": "no such question %s" % qid}
+            was = meta.get("answer")
+            meta.update(state="answered", answer=answer, answered=self.now())
+            self._whois_save(meta)
+        what = {"yes": "%s, learned", "no": "not %s, noted", "unsure": "skipped (%s)"}[answer] % meta["name"]
+        return 200, {"message": ("changed: " if was and was != answer else "") + what}
+
+    def whois_labels(self, days=60):
+        """Answered questions of the last `days`, and how many are still open."""
+        cutoff = self.now() - days * 86400
+        items = self._whois_all()
+        return {"open": sum(1 for m in items if m["state"] == "pending"),
+                "labels": [{k: m.get(k) for k in ("id", "ref", "name", "answer", "answered")}
+                           for m in items if m["state"] == "answered" and m["answered"] >= cutoff]}
 
     # ------------------------------------------------------------------ summary
     def summarize_if_done(self):

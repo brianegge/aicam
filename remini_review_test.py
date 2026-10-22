@@ -481,3 +481,21 @@ def test_note_skipped_when_the_day_has_her_and_later_photos_say_more_of(tmp_path
     clock.t += 3600
     r.send_digest()
     assert http.texts[-1][1] == "More of Chloe Oct 19"
+
+
+def test_whois_asks_once_records_answers_and_lists_them(tmp_path):
+    r, http, clock = make(tmp_path)
+    code, res = r.add_whois(jpeg(), "Sam", 3, ref="q1")
+    assert code == 200 and res["status"] == "pending"
+    assert http.pushes[-1]["title"] == "Is this Sam?"
+    assert r.add_whois(jpeg(), "Sam", 3, ref="q1")[1]["status"] == "already"
+    assert len(http.pushes) == 1
+    assert r.whois_labels() == {"open": 1, "labels": []}
+    assert r.answer_whois(res["id"], "maybe")[0] == 400
+    assert r.answer_whois("whois-nope", "yes")[0] == 404
+    assert r.answer_whois(res["id"], "yes")[1]["message"] == "Sam, learned"
+    assert r.answer_whois(res["id"], "no")[1]["message"] == "changed: not Sam, noted"
+    got = r.whois_labels()
+    assert got["open"] == 0 and [(l["ref"], l["name"], l["answer"]) for l in got["labels"]] == [("q1", "Sam", "no")]
+    # Not candidates: nothing here is digested or shared.
+    assert r.labels() == [] and r.send_digest() == 0

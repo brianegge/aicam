@@ -45,6 +45,7 @@ def _ha():
     ha.should_notify_vehicle.return_value = True
     ha.is_dog_inside.return_value = False
     ha.pet_sitter_mode.return_value = False
+    ha.sara_home.return_value = False
     return ha
 
 
@@ -301,12 +302,47 @@ class TestPetSitter:
         ha.pet_sitter_mode.assert_not_called()
 
 
+class TestSaraHome:
+    """Sara looks after Rufus while she is here: in the daytime his comings and
+    goings are not news. At night, and out on the road, they still are."""
+
+    def _run(self, predictions, tmp_path, home, mode="home"):
+        ha = _ha()
+        ha.mode.return_value = mode
+        ha.sara_home.return_value = home
+        return _notify(ha, predictions, tmp_path), ha
+
+    def test_a_dog_is_not_sent_while_sara_is_home(self, tmp_path):
+        priority, _ = self._run([_dog()], tmp_path, home=True)
+        assert priority == -4
+
+    def test_a_dog_is_sent_when_sara_is_not_home(self, tmp_path):
+        priority, _ = self._run([_dog()], tmp_path, home=False)
+        assert priority == 0
+
+    def test_a_dog_is_sent_at_night_even_with_sara_home(self, tmp_path):
+        priority, ha = self._run([_dog()], tmp_path, home=True, mode="night")
+        assert priority != -4
+        ha.sara_home.assert_not_called()
+
+    def test_a_dog_loose_on_the_road_still_alerts(self, tmp_path):
+        priority, _ = self._run([_dog("dog_road")], tmp_path, home=True)
+        assert priority == 1
+
+    def test_only_a_dog_asks_home_assistant(self, tmp_path):
+        _, ha = self._run([_cat()], tmp_path, home=True)
+        ha.sara_home.assert_not_called()
+
+
 def test_an_unreachable_home_assistant_still_notifies_dogs():
     import homeassistant
     ha = homeassistant.HomeAssistant.__new__(homeassistant.HomeAssistant)
     with mock.patch.object(ha, "get_state", side_effect=RuntimeError("down"),
                            create=True):
         assert ha.pet_sitter_mode() is False
+    with mock.patch.object(ha, "get_state_value", side_effect=RuntimeError("down"),
+                           create=True):
+        assert ha.sara_home() is False
 
 
 def test_a_vehicle_in_the_garage_is_not_announced(tmp_path):

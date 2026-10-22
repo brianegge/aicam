@@ -66,6 +66,9 @@ class HomeAssistant:
             raise KeyError('No such device "{}"'.format(name))
 
     def get_state(self, entity: str) -> bool:
+        return self.get_state_value(entity) == "on"
+
+    def get_state_value(self, entity: str) -> str:
         # Only a reply with a state is worth keeping. While Home Assistant is
         # starting it answers {"message": "Entity not found."} for entities it
         # has not loaded yet, and that used to overwrite the last good answer
@@ -79,11 +82,11 @@ class HomeAssistant:
             response = {"error": str(e)}
         if isinstance(response, dict) and "state" in response:
             self.cache[entity] = response
-            return response["state"] == "on"
+            return response["state"]
         if entity not in self.cache:
             raise RuntimeError(f"Invalid response from entity {entity}={response}")
         log.warning(f"Failed to fetch {entity} ({response}). Using cached response")
-        return self.cache[entity]["state"] == "on"
+        return self.cache[entity]["state"]
 
     def set_input_boolean(self, switch: str, state: bool) -> requests.Response:
         json = {
@@ -141,6 +144,17 @@ class HomeAssistant:
             return self.get_state("input_boolean.pet_sitter_mode")
         except RuntimeError:
             log.warning("Could not read pet_sitter_mode; notifying dogs")
+            return False
+
+    def sara_home(self) -> bool:
+        """Sara looks after Rufus while she is here.
+
+        Unreachable Home Assistant answers False, as pet_sitter_mode does.
+        """
+        try:
+            return self.get_state_value("person.sara") == "home"
+        except RuntimeError:
+            log.warning("Could not read person.sara; notifying dogs")
             return False
 
     def echo_speaks(self, message: str) -> Any:

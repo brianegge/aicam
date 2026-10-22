@@ -222,6 +222,7 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
     )
     dog_inside = ha.is_dog_inside() if (has_dog or has_dog_road) else False
     pet_sitter = ha.pet_sitter_mode() if has_dog else False
+    sara_home = ha.sara_home() if has_dog and mode != "night" else False
     packages = list(
         filter(lambda p: p["tagName"] == "package" and "departed" not in p, predictions)
     )
@@ -311,6 +312,12 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
             # got out, sitter or not.
             i = -4
             i_type = "pet sitter mode"
+        elif tagName == "dog" and sara_home:
+            # Sara looks after Rufus while she is here, so in the daytime his
+            # comings and goings are not news. At night they still are, and
+            # dog_road (out on the road) alerts whoever is home.
+            i = -4
+            i_type = "Sara home"
         elif tagName == "deer" and has_person:
             i = -1
             # this should never occur

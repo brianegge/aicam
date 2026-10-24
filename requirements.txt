@@ -7,7 +7,7 @@ filterpy
 sdnotify
 pytest
 requests
-Pillow==12.3.0
+Pillow==13.0.0
 paho-mqtt
 # excludes.py reads excludes/*.yaml. Without this it logs one warning and
 # ignores every exclusion, which looks exactly like the model regressing.

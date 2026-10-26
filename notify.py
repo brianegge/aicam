@@ -290,7 +290,10 @@ def notify(cam, message, image, predictions, config, ha, model_name="color", ori
             i = -2
             i_type = "cat in garage rule"
         elif tagName == "person" and cam.name == "garage":
-            i = -3
+            # -2, not -3: Pushover drops -3, so the IR phantom persons in the
+            # garage never arrived anywhere they could be marked false. -2 is
+            # silent but lands in the app list with the review links.
+            i = -2
             i_type = "person in garage rule"
         elif tagName == "vehicle" and cam.name == "garage":
             # Detected so lpr-enrich can ask whether a parked car is still

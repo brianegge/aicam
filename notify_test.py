@@ -354,13 +354,16 @@ def test_a_vehicle_in_the_garage_is_not_announced(tmp_path):
     assert _review_post([car], "vehicle in garage", tmp_path) is None
 
 
-def test_a_person_in_the_garage_is_not_posted_at_an_invalid_priority(tmp_path):
-    """The -3 rules were posted and refused by Pushover, 337 times out of 337:
-    it accepts -2..2 only."""
+def test_a_person_in_the_garage_is_posted_silently_for_review(tmp_path):
+    """It was -3, which Pushover refuses (337 of 337 rejections), so phantom
+    garage persons never reached anywhere they could be marked false. -2
+    is silent but keeps the review links."""
     person = {"tagName": "person", "probability": 0.9, "camName": "garage",
               "boundingBox": {"left": 0.3, "top": 0.2, "width": 0.1, "height": 0.4},
               "center": {"x": 0.35, "y": 0.4}}
-    assert _review_post([person], "person in garage", tmp_path) is None
+    data = _review_post([person], "person in garage", tmp_path)
+    assert data is not None
+    assert int(data["priority"]) == -2
 
 
 class TestCatInGarage:

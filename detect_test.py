@@ -194,6 +194,42 @@ def test_held_detection_matching_nothing_is_discarded():
     assert len(prev["vehicle"]) == 1  # and no new track was started
 
 
+def test_a_survived_gap_is_recorded():
+    """The gap a track went unseen and came back from, for choosing the expiry
+    rule. The 2026-11-03 garage-l car survived gaps of 11 and 18 minutes while
+    parked in plain sight."""
+    track = _tracked(age=5)
+    track["last_time"] = datetime.now() - timedelta(minutes=11)
+    prev = {"vehicle": [track]}
+    track_predictions([_pred("vehicle", 0.9)], prev, [])
+    assert track["max_gap"] == pytest.approx(660, abs=5)
+    assert track["gaps"] == [pytest.approx(660, abs=5)]
+
+
+def test_one_sweep_is_not_a_gap():
+    """Every ordinary match would otherwise append an entry, burying the
+    misses that matter under one row per sweep."""
+    track = _tracked(age=5)
+    track["last_time"] = datetime.now() - timedelta(seconds=10)
+    prev = {"vehicle": [track]}
+    track_predictions([_pred("vehicle", 0.9)], prev, [])
+    assert "gaps" not in track
+    assert "max_gap" not in track
+
+
+def test_recorded_gaps_are_bounded_but_the_max_is_not():
+    """A track parked for days must not grow one list entry per miss; the
+    longest gap it survived still has to keep rising."""
+    track = _tracked(age=5)
+    track["gaps"] = [100] * detect.MAX_RECORDED_GAPS
+    track["max_gap"] = 100.0
+    track["last_time"] = datetime.now() - timedelta(minutes=30)
+    prev = {"vehicle": [track]}
+    track_predictions([_pred("vehicle", 0.9)], prev, [])
+    assert len(track["gaps"]) == detect.MAX_RECORDED_GAPS
+    assert track["max_gap"] == pytest.approx(1800, abs=5)
+
+
 def test_over_threshold_detection_matching_nothing_is_a_real_arrival():
     """The drop must not suppress genuine arrivals."""
     prev = {"vehicle": [_tracked(box=(0.1, 0.1, 0.2, 0.2))]}

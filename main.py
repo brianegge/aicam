@@ -675,8 +675,13 @@ if __name__ == "__main__":
     ]
     logging.basicConfig(
         level=logging.DEBUG,
-        format="%(name)-5s %(levelname)-4s %(message)s",
-        datefmt="%b-%d %H:%M",
+        # datefmt was set here from the start but %(asctime)s was never in the
+        # format, so every line in aicam.log went out untimed -- 444 MB of it,
+        # useless for working out when anything happened. Seconds matter: the
+        # sweep interval is 10s, so %H:%M alone cannot resolve one sweep from
+        # the next.
+        format="%(asctime)s %(name)-5s %(levelname)-4s %(message)s",
+        datefmt="%b-%d %H:%M:%S",
         handlers=handlers,
     )
     logging.getLogger("urllib3.connectionpool").setLevel(logging.INFO)

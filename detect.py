@@ -98,6 +98,23 @@ STATIC_EXPIRY_MULTIPLIER = 4
 # Matched to the detector's conf floor, so a weak frame on an object we are
 # already holding actually reaches this check instead of being discarded twice.
 HOLD_PROBABILITY = 0.15
+# Measurement only, for choosing the expiry rule from evidence instead of
+# guesswork. A track records the gaps it has survived -- the stretches it went
+# undetected and was then found again in the same place -- and logs them when
+# it expires. Nothing reads these to make a decision yet.
+#
+# Why: on 2026-11-03 a car left garage-l at 06:21:54 and the departure was
+# announced at 07:21:51, 59m57s later, because age 494 at a 10s interval puts
+# expiry_minutes() far past its own min(..., 60) clamp. But that track had only
+# been seen on ~46% of its sweeps, with gaps of 11 and 18 minutes while the car
+# was sitting right there, so a short expiry would have invented departures all
+# morning. The gap distribution is the missing number.
+#
+# One sweep's gap is not a miss, so only gaps well above any configured
+# interval (10s on every camera) are kept, and the list is bounded because a
+# long-lived track would otherwise grow one entry per miss for days.
+GAP_NOTABLE_SECONDS = 60
+MAX_RECORDED_GAPS = 50
 
 
 def recently_seen(recent_objects, tag_name, now, hold_seconds=OBJECT_HOLD_SECONDS):
@@ -381,7 +398,17 @@ def track_predictions(valid_predictions, prev_predictions, new_predictions):
                 ) <= STATIC_IOU:
                     prev["static"] = False
                 prev["boundingBox"] = this_box  # move the box to current
-                prev["last_time"] = datetime.now()
+                now = datetime.now()
+                # Record the gap this track just survived, before last_time is
+                # moved. See GAP_NOTABLE_SECONDS -- measurement for the expiry
+                # rule, read by nothing.
+                gap = (now - prev["last_time"]).total_seconds()
+                if gap >= GAP_NOTABLE_SECONDS:
+                    prev["max_gap"] = max(prev.get("max_gap", 0.0), gap)
+                    gaps = prev.setdefault("gaps", [])
+                    if len(gaps) < MAX_RECORDED_GAPS:
+                        gaps.append(round(gap))
+                prev["last_time"] = now
                 prev["age"] = prev["age"] + 1
                 for t in ["age", "ignore", "priority", "priority_type", "static"] + list(
                     ALPR_STATE_KEYS
@@ -637,6 +664,26 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         ] = f"{e['tagName']} departed from {cam.name} after being seen {e['age']} times over the past {t}"
         e["departed"] = True
         logger.info(e["msg"])
+        logger.info(
+            "%s %s track stats: age=%d span=%.0fs hit_rate=%.0f%% "
+            "expiry=%.1fmin late_by=%.0fs max_gap=%.0fs static=%s gaps=%s",
+            cam.name,
+            e["tagName"],
+            e["age"],
+            (e["last_time"] - e["start_time"]).total_seconds(),
+            # Share of this camera's sweeps over the track's life on which the
+            # object was actually found. 46% on the 2026-11-03 garage-l car.
+            100.0
+            * e["age"]
+            / max(1.0, (e["last_time"] - e["start_time"]).total_seconds() / cam.interval),
+            expiry_minutes(e, cam.interval),
+            # How stale the departure announcement is: the object was last seen
+            # this long before we said it had gone.
+            (datetime.now() - e["last_time"]).total_seconds(),
+            e.get("max_gap", 0.0),
+            e.get("static"),
+            e.get("gaps", []),
+        )
         if e.get("unconfirmed"):
             # Never announced, so its departure is not news either.
             continue

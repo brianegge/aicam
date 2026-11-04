@@ -194,6 +194,35 @@ def test_held_detection_matching_nothing_is_discarded():
     assert len(prev["vehicle"]) == 1  # and no new track was started
 
 
+def _box(left, top, width, height):
+    return {"left": left, "top": top, "width": width, "height": height}
+
+
+def test_the_neighbours_car_is_not_ours():
+    """The white car at 13:00 on 2026-11-04, announced as "vehicle 71% in
+    front of right garage". Its box bottom was 0.1316 + 0.1124 = 0.2440 and
+    the rule asked for < 0.24, so it missed by four thousandths."""
+    assert detect.on_the_neighbors_drive(
+        _box(0.92390805, 0.13163833, 0.06638497, 0.1124066))
+
+
+def test_cars_on_our_own_apron_are_not_the_neighbours():
+    """Real boxes from garage_left, placed on the property by lpr-enrich's
+    ground map. The two highest in frame sit above the old 0.24 line, which
+    is why the bottom alone cannot carry this test -- they separate from the
+    neighbour horizontally, not vertically."""
+    for left, bottom in [(0.398, 0.1954), (0.491, 0.1991), (0.39, 0.2398),
+                         (0.525, 0.2444), (0.521, 0.262), (0.622, 0.2852)]:
+        box = _box(left, bottom - 0.1, 0.2, 0.1)
+        assert not detect.on_the_neighbors_drive(box), (left, bottom)
+
+
+def test_a_car_low_on_the_right_of_the_apron_is_still_ours():
+    """The left test alone would swallow cars parked at the right-hand edge;
+    they are far lower in the frame."""
+    assert not detect.on_the_neighbors_drive(_box(0.85, 0.5, 0.14, 0.3))
+
+
 def test_a_survived_gap_is_recorded():
     """The gap a track went unseen and came back from, for choosing the expiry
     rule. The 2026-11-03 garage-l car survived gaps of 11 and 18 minutes while

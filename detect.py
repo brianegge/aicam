@@ -115,6 +115,32 @@ HOLD_PROBABILITY = 0.15
 # long-lived track would otherwise grow one entry per miss for days.
 GAP_NOTABLE_SECONDS = 60
 MAX_RECORDED_GAPS = 50
+# garage-l looks past the top-right corner of its frame into the neighbour's
+# driveway. A vehicle whose box ends above this line and starts right of
+# NEIGHBOR_LEFT is over there, not on the apron.
+#
+# Measured on 21 days of garage_left vehicle events to 2026-11-04, classified
+# by lpr-enrich's ground map rather than by eye: of 160 placeable events, 6
+# stand off the property and 154 on it. `left > 0.8 and bottom < 0.26` catches
+# the neighbour's-driveway cluster and **none** of the 154.
+#
+# The bottom alone cannot do it, which is why this keeps the left test: real
+# cars on the apron reach as high as bottom 0.1954 and 0.1991, and one real
+# car and one neighbour car sit at exactly 0.2444. They separate horizontally
+# (neighbour left 0.92-0.96; the real ones mid-frame, cx 0.48-0.69) and not
+# vertically.
+#
+# Was 0.24, which missed by four thousandths: the white car at 13:00 on
+# 2026-11-04 had bottom 0.1316 + 0.1124 = 0.2440 and was announced as
+# "vehicle 71% in front of right garage".
+NEIGHBOR_BOTTOM = 0.26
+NEIGHBOR_LEFT = 0.8
+
+
+def on_the_neighbors_drive(box):
+    """True for a garage-l box standing in the neighbour's driveway."""
+    return (box["top"] + box["height"] < NEIGHBOR_BOTTOM
+            and box["left"] > NEIGHBOR_LEFT)
 
 
 def recently_seen(recent_objects, tag_name, now, hold_seconds=OBJECT_HOLD_SECONDS):
@@ -506,10 +532,8 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
                     p["ignore"] = "road"
     if cam.name == "garage-l":
         for p in predictions:
-            if (
-                p["boundingBox"]["top"] + p["boundingBox"]["height"] < 0.24
-                and (p["tagName"] in ["vehicle", "person"])
-                and p["boundingBox"]["left"] > 0.8
+            if p["tagName"] in ["vehicle", "person"] and on_the_neighbors_drive(
+                p["boundingBox"]
             ):
                 p["ignore"] = "neighbor"
             if p["boundingBox"]["top"] + p["boundingBox"]["height"] < 0.24 and (
@@ -651,6 +675,11 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
             draw_road(im_pil, cam.road_line)
         if cam.name in ["garage-l"]:
             draw_road(im_pil, [(0, 0.24), (1.0, 0.24)])
+            # The neighbour's corner has its own, lower threshold, so draw it
+            # too: with only the 0.24 line in the picture, the 2026-11-04 car
+            # looked like it sat below the rule that should have caught it.
+            draw_road(im_pil, [(NEIGHBOR_LEFT, NEIGHBOR_BOTTOM),
+                               (1.0, NEIGHBOR_BOTTOM)])
     notify_expired = []
     for e in expired:
         draw_bbox(im_pil, e, "grey", width=4)

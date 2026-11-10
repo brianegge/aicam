@@ -375,7 +375,8 @@ the held photo. A match becomes an ordinary candidate guessed "Chloe (outfit:
 
 **Face matches share without asking** (`auto-share-faces = true`, 2026-10-16,
 after 29/29 face guesses were right; optional `auto-share-min`). Outfit
-matches are still asked. With auto-share on, open questions no longer hold
+matches too with `auto-share-outfits = true` (2026-11-10, after 23/23 Yes
+since the subject/clear gate); without it they are still asked. With auto-share on, open questions no longer hold
 the batch; a day already in the chat gets "More of Chloe Oct 15" instead of
 the note again. After a batch with auto-shared photos, one Pushover "Sent N
 photos" carries a numbered grid and links to `remini-sent.html` (install

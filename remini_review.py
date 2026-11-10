@@ -99,6 +99,10 @@ class ReminiReviewConfig(object):
         # still asked. auto-share-min keeps a floor on the face score.
         self.auto_share = s.getboolean("auto-share-faces", False)
         self.auto_share_min = s.getfloat("auto-share-min", 0.0)
+        # Outfit matches too (Brian, 2026-11-10): since only "subject"/"clear"
+        # are asked about (200d0f0), 23 of 23 were answered Yes. The six Noes
+        # were all from the day before that gate, on far-edge guesses.
+        self.auto_share_outfits = s.getboolean("auto-share-outfits", False)
         self.whois_url = s.get("whois-page-url", self.page_url.replace("remini-review.html", "whois.html"))
         self.sent_page_url = s.get("sent-page-url", self.page_url.replace("remini-review.html", "remini-sent.html"))
         # Photos with no detectable face go to a vision model (aicam's
@@ -476,9 +480,17 @@ class ReminiReview(object):
                     m.update(state="pending", predicted="yes", summarized=None,
                              label="%s (outfit%s)" % (self.cfg.name,
                                                       ": " + verdict["where"] if verdict.get("where") else ""))
-                    self._save(m["id"], m)
-                    img = cv2.imread(self._path(m["id"], "jpg"))
-                    self._ask(m["id"], img, m)
+                    if self.cfg.auto_share_outfits and m.get("share", True):
+                        # No face is picked, so remini-chloe learns no face from it;
+                        # "Sent N photos" still lets a wrong one be marked.
+                        m.update(state="confirmed", accepted=True, auto=True, answered=self.now(),
+                                 summarized=self.now())
+                        self._save(m["id"], m)
+                        logger.info("remini review: %s shared without asking (%s)", m["id"], m["label"])
+                    else:
+                        self._save(m["id"], m)
+                        img = cv2.imread(self._path(m["id"], "jpg"))
+                        self._ask(m["id"], img, m)
                     asked += 1
                 else:
                     m.update(state="rejected", answered=self.now())

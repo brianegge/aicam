@@ -441,6 +441,26 @@ def test_a_no_on_an_auto_shared_photo_is_a_correction(tmp_path):
     assert {l["source"]: l for l in r.labels()}["a"]["state"] == "rejected"   # learned as not her
 
 
+def test_outfit_matches_share_without_asking_when_turned_on(tmp_path):
+    r, http, clock = make(tmp_path, **{"auto-share-outfits": "true"})
+    ref = r.add_candidate(jpeg(), [100, 50, 40, 40], source="face", date="2026-11-10")[1]["id"]
+    r.confirm(ref, "yes")
+    pushes = len(http.pushes)
+    http.outfit_answer = {"present": True, "visibility": "clear", "where": "left", "why": "x"}
+    held = r.add_noface(jpeg(), source="back", date="2026-11-10")[1]["id"]
+    r.process_held()
+    http.outfit_answer = {"present": True, "visibility": "partial", "where": "edge", "why": "x"}
+    sleeve = r.add_noface(jpeg(200, 200), source="sleeve", date="2026-11-10")[1]["id"]
+    r.process_held()
+    m = r._load(held)
+    assert m["state"] == "confirmed" and m["auto"] and m["label"] == "Chloe (outfit: left)"
+    assert r._load(sleeve)["state"] == "rejected"          # still only subject/clear
+    assert len(http.pushes) == pushes                       # nothing asked
+    clock.t += 16 * 60
+    assert r.send_digest() == 2 and http.pushes[-1]["title"] == "Sent 2 photos of Chloe"
+    assert r.confirm(held, "no")[0] == 200 and r._load(held)["state"] == "rejected"
+
+
 def test_auto_share_is_off_by_default(tmp_path):
     r, http, _ = make(tmp_path)
     assert r.add_candidate(jpeg(), [1, 1, 80, 80], source="a", predicted="yes",

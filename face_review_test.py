@@ -378,3 +378,27 @@ def test_an_unknown_or_unsure_face_is_still_asked(tmp_path):
     rev, http = _visit(tmp_path, {unsure: webp(100, 100), B1: webp(100, 100)})
     rev.poll_once()
     assert {p["title"] for p in http.pushes} == {"Who is this?"}
+
+
+def test_frigate_naming_most_attempts_names_the_sighting(tmp_path):
+    """16:30 on 2026-11-19: Frigate said Sara on four of six crops, "unknown"
+    on the sharpest -- which the picture led with -- and the notification
+    said "Unknown face" over six pictures of Sara."""
+    sharp = "1790000000.1-sar001-1790000005.0-unknown-0.73.webp"
+    soft = ["1790000000.1-sar001-179000000%d.0-Sara-0.%d.webp" % (i, s)
+            for i, s in ((1, 87), (2, 90), (3, 91))]
+    images = {sharp: webp(140, 160)}
+    images.update({f: webp(100, 100, blur=4) for f in soft})
+    rev, http = _visit(tmp_path, images)
+    rev.poll_once()
+    push = http.pushes[0]
+    assert push["title"] == "Is this Sara?"
+    assert push["message"].startswith("Looks like Sara (3 of 4 attempts, up to 91%)")
+
+
+def test_two_names_or_a_minority_name_nobody():
+    a = lambda g, s=0.85: {"guess": g, "score": s}
+    assert fr.likely_name([a("Sara"), a("Kyle"), a("unknown")]) is None
+    assert fr.likely_name([a("Sara"), a("unknown"), a("unknown")]) is None
+    assert fr.likely_name([a("Sara"), a("unknown")]) == ("Sara", 1, 2, 0.85)
+    assert fr.likely_name([a("unknown")]) is None

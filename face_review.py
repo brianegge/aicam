@@ -189,6 +189,26 @@ def best_attempt(fit):
     return max(fit, key=key)
 
 
+def likely_name(attempts):
+    """The name Frigate gave most of this person's attempts, as (name, count,
+    of, best score), when no other name was given; else None.
+
+    The picture leads with the crop best to look at, which need not be one
+    Frigate could name. At 16:30 on 2026-11-19 it guessed Sara on four of six
+    garage crops (0.87-0.91) and "unknown" on the sharpest, and the
+    notification said "Unknown face" over six pictures of Sara. Every attempt
+    counts here, fit or not: a crop too soft to train on still tells us who
+    Frigate thought it was.
+    """
+    named = [a for a in attempts if a["guess"] != "unknown"]
+    if not named or len(set(a["guess"] for a in named)) != 1:
+        return None
+    if len(named) * 2 < len(attempts):
+        return None
+    return (named[0]["guess"], len(named), len(attempts),
+            max(a["score"] for a in named))
+
+
 def split_people(attempts):
     """One group per person. A Frigate event is one tracked person, and two
     people arriving together are two events (Josiana and her helper,
@@ -378,7 +398,7 @@ class FaceReview(object):
             trainable = face_quality(best_img)[1] >= self.cfg.train_min_sharpness
             self.send(best, self._picture(best, judged, trainable), camera or None,
                       names, shown=min(len(judged), self.cfg.max_tiles),
-                      trainable=trainable)
+                      trainable=trainable, likely=likely_name(group))
             statuses.append("sent")
         for status in ("sent", "unfit", "no pushover", "too small"):
             if status in statuses:
@@ -401,7 +421,7 @@ class FaceReview(object):
             tiles.append((img, label + mark, a is best and trainable, bool(why)))
         return mosaic(tiles)
 
-    def send(self, attempt, img, camera, names, shown=1, trainable=True):
+    def send(self, attempt, img, camera, names, shown=1, trainable=True, likely=None):
         # Train crops are small; scale up so the lock screen shows a face, not
         # a thumbnail of one.
         side = max(img.shape[:2])
@@ -410,7 +430,10 @@ class FaceReview(object):
                              interpolation=cv2.INTER_CUBIC)
         ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
         guess = attempt["guess"]
-        if guess == "unknown":
+        if guess == "unknown" and likely:
+            message = "Looks like %s (%d of %d attempts, up to %.0f%%)" % (
+                likely[0], likely[1], likely[2], likely[3] * 100)
+        elif guess == "unknown":
             message = "Unknown face"
         else:
             message = "Looks like %s (%.0f%%)" % (guess, attempt["score"] * 100)
@@ -428,6 +451,7 @@ class FaceReview(object):
             # check, and naming still works, but nothing is being asked.
             "title": (("%s at %s" % (guess, camera.replace("_", " ")) if camera else guess)
                       if guess != "unknown" and attempt["score"] >= NAMED_SCORE
+                      else "Is this %s?" % likely[0] if guess == "unknown" and likely
                       else "Who is this?"),
             "message": message,
             "timestamp": int(attempt["ts"]),

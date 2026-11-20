@@ -135,7 +135,8 @@ def face_quality(img, detector_path=""):
                same as a whited-out face, and dropped two clear faces (17%
                and 25%). The middle half reads 11% and 16% for those, and 76%
                for the garage-lit face of 21:40 on 2026-10-03.
-    sharpness  variance of the Laplacian, at the crop's own size.
+    sharpness  variance of the Laplacian, with a crop bigger than RANK_SIDE
+               shrunk to it first (see crop_sharpness).
     yaw        how far the nose sits from midway between the eyes, in eye
                widths: 0 is facing the camera. None when no detector is
                configured or it finds no face, which is 18 of 177 crops --
@@ -144,7 +145,7 @@ def face_quality(img, detector_path=""):
     grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = grey.shape
     blown = float((grey[h // 4:h - h // 4, w // 4:w - w // 4] >= 245).mean())
-    sharpness = float(cv2.Laplacian(grey, cv2.CV_64F).var())
+    sharpness = crop_sharpness(grey)
     yaw = None
     if detector_path and os.path.exists(detector_path):
         h, w = img.shape[:2]
@@ -165,6 +166,29 @@ RANK_SIDE = 112
 # downcast, eyes-closed face of her daughter as the one to train
 # (2026-10-10 15:25).
 NAMED_SCORE = 0.9
+
+
+def crop_sharpness(grey):
+    """Laplacian variance at no more than RANK_SIDE on the short side.
+
+    Measured at the crop's own size, a big crop read blurred because its
+    edges are spread over more pixels: of the faces in the library -- every
+    one accepted by eye -- 42% of those over 60,000 px passed the 120 training
+    bar, against 100% under 6,000. The recogniser sees them at about this
+    size, so a big crop is shrunk to it first. A small one is not enlarged:
+    upscaling adds no detail and would fail Kyle's sharp 64x86 crop, the one
+    these thresholds were set against. Shrinking only, the library passes
+    95% of big crops and 100% of small ones, and the Train tab's trainable
+    share moves 45% -> 50% (2026-11-19, 123 library and 194 Train crops).
+    Sara's 231x242 face at 16:30 that day read 107 at full size and 377 here.
+    """
+    h, w = grey.shape[:2]
+    short = min(h, w)
+    if short > RANK_SIDE:
+        grey = cv2.resize(grey, (max(1, round(w * RANK_SIDE / short)),
+                                 max(1, round(h * RANK_SIDE / short))),
+                          interpolation=cv2.INTER_AREA)
+    return float(cv2.Laplacian(grey, cv2.CV_64F).var())
 
 
 def rank_sharpness(img):

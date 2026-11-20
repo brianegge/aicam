@@ -402,3 +402,25 @@ def test_two_names_or_a_minority_name_nobody():
     assert fr.likely_name([a("Sara"), a("unknown"), a("unknown")]) is None
     assert fr.likely_name([a("Sara"), a("unknown")]) == ("Sara", 1, 2, 0.85)
     assert fr.likely_name([a("unknown")]) is None
+
+
+def test_a_big_crop_is_judged_at_the_size_the_recogniser_sees():
+    """Sara's 231x242 face at 16:30 on 2026-11-19 read 107 at full size,
+    under the 120 training bar, and 377 at 112 px. Big crops are shrunk
+    before measuring; small ones are measured as they are."""
+    small = cv2.cvtColor(cv2.imdecode(np.frombuffer(webp(100, 100), np.uint8),
+                                      cv2.IMREAD_COLOR), cv2.COLOR_BGR2GRAY)
+    big = cv2.resize(small, (336, 336), interpolation=cv2.INTER_LINEAR)
+    full = float(cv2.Laplacian(big, cv2.CV_64F).var())
+    assert fr.crop_sharpness(big) > 3 * full
+    assert fr.crop_sharpness(small) == float(cv2.Laplacian(small, cv2.CV_64F).var())
+
+
+def test_a_big_soft_looking_face_can_train(tmp_path):
+    raw = cv2.imdecode(np.frombuffer(webp(100, 110), np.uint8), cv2.IMREAD_COLOR)
+    big = cv2.resize(raw, (400, 440), interpolation=cv2.INTER_LINEAR)
+    # At full size this reads ~60, under the 120 training bar.
+    ok, buf = cv2.imencode(".webp", big, [cv2.IMWRITE_WEBP_QUALITY, 100])
+    rev, http = _visit(tmp_path, {B1: buf.tobytes()})
+    rev.poll_once()
+    assert "notrain" not in parse_qs(urlparse(http.pushes[0]["url"]).query)

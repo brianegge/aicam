@@ -1,4 +1,4 @@
-numpy==2.5.4
+numpy==2.5.5
 aiohttp
 #pysmartthings
 opencv-python

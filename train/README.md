@@ -124,6 +124,13 @@ yolo11s 608-square recipe on more data, so the comparison isolates the data.
 
 3. **Train, export, score** -- `run_pv13.sh`, then `after_pv13.sh`.
 
+   v14 (2026-11-22) is `run_pv14.sh` / `after_pv14.sh`. The stray `person`
+   class is gone by then, so v14 exports as `package,vehicle` and needs no
+   remap; check `data.yaml`'s `names` on every new version before skipping it.
+   Generated through the SDK with `generate_version(settings={"preprocessing":
+   {"resize": {"width": 608, "height": 608, "format": "Stretch to"}},
+   "augmentation": {}})` -- valid and test came out identical to v13's.
+
 4. **Replay the capture archive** -- `replay_vehicle.py OLD NEW > replay.csv`.
    The test split holds no IR glare and no parked cars on peach tree; the
    archive has both. Read the frames where only one model fires before

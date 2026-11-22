@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  MegaDetector for mdconfirm.py: keeps MDv1000-redwood loaded and answers
+  POST /detect on 127.0.0.1:5060.
+
+  Its own venv, not aicam's: megadetector pulls in torch and yolov5, and
+  ~/md-venv was built from uv's cpython 3.12 with
+      ~/md-venv/bin/pip install megadetector==10.0.28
+  The model (~280 MB) downloads into the megadetector cache on first start.
+
+  Install to ~/Library/LaunchAgents/com.brianegge.md-server.plist and load with
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.brianegge.md-server.plist
+  aicam does not depend on it: if it is down, one-frame sightings simply wait
+  for the movement gate, as they did before it existed.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.brianegge.md-server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/claw/md-venv/bin/python</string>
+        <string>-u</string>
+        <string>/Users/claw/aicam/md_server.py</string>
+        <string>--port</string>
+        <string>5060</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/claw/aicam</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/claw/aicam-data/md-server.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/claw/aicam-data/md-server.log</string>
+</dict>
+</plist>

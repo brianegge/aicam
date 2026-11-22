@@ -15,6 +15,7 @@ from PIL import Image
 import alpr
 import autolabel
 import confirm
+import mdconfirm
 import frigate_events
 import frigate_lpr
 import verify
@@ -741,7 +742,9 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
     gate = confirm.gate_for(config)
     if gate is not None:
         arrivals = confirm.apply(
-            gate, valid_predictions, new_predictions, tracked_pairs, hold_now)
+            gate, valid_predictions, new_predictions, tracked_pairs, hold_now,
+            vouch=mdconfirm.voucher_for(config, cam.name, image,
+                                        dark=dark_thresholds is not None))
         alert_predictions = [p for p in valid_predictions if not p.get("unconfirmed")]
         hold_new_tracks(cam, new_predictions, im_pil, image, save_dir, hold_now)
         present = set(id(prev) for _, prev in tracked_pairs)

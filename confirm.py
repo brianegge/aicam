@@ -92,6 +92,18 @@ class MovementGate:
                     tag_name, cam_name, len(earlier))
         return True
 
+    def vouch(self, tag_name, cam_name, now, why):
+        """Activate a class on a camera on other evidence than movement.
+
+        Called after observe() has filed this sighting, so the activation
+        survives _prune() for as long as the class keeps being seen there --
+        the same lifetime a movement activation has.
+        """
+        if (tag_name, cam_name) in self.activated:
+            return
+        self.activated[(tag_name, cam_name)] = now
+        logger.info("%s confirmed by %s on %s", tag_name, why, cam_name)
+
     def needs_second_frame(self, p):
         limit = self.second_frame.get(p["tagName"])
         return limit is not None and (p.get("probability") or 0) < limit
@@ -177,8 +189,13 @@ def parse_second_frame(text):
     return limits
 
 
-def apply(gate, valid_predictions, new_predictions, tracked_pairs, now):
+def apply(gate, valid_predictions, new_predictions, tracked_pairs, now, vouch=None):
     """Hold back unconfirmed animal arrivals; release them once confirmed.
+
+    `vouch(p)`, if given, is asked about a new track whose class is not yet
+    active on its camera; True confirms the class there as movement would.
+    It may only let a sighting through -- see mdconfirm.py, which is the one
+    caller, for why it must never hold one back.
 
     Returns the predictions that count as arrivals this frame: new tracks of
     ungated or active classes, plus held tracks whose class is now active.
@@ -194,6 +211,12 @@ def apply(gate, valid_predictions, new_predictions, tracked_pairs, now):
     for p in valid_predictions:
         track = track_of.get(id(p))
         if id(p) in new_ids:
+            if (not gate.is_active(p["tagName"], now, p["camName"])
+                    and vouch is not None and gate.gated(p["tagName"])
+                    and not p.get("hold_only") and vouch(p)):
+                gate.vouch(p["tagName"], p["camName"], now,
+                           "MegaDetector %.2f" % getattr(vouch, "last", 0) if
+                           getattr(vouch, "last", None) is not None else "a second opinion")
             if not gate.is_active(p["tagName"], now, p["camName"]):
                 p["unconfirmed"] = True  # p is the new track itself
             elif gate.needs_second_frame(p):

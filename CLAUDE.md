@@ -389,6 +389,35 @@ ones are deleted after `keep-rejected-days` (30); confirmed, trained and sent
 ones are kept -- they are the photos of her. ubuntu24's own copy of every
 downloaded photo is trimmed after 30 days unless it was a candidate.
 
+## MegaDetector vouching (`mdconfirm.py`, `md_server.py`)
+
+The movement gate (`confirm.py`) holds an animal until it is seen on fresh
+ground a second time on the same camera, which also drops every animal that
+crosses a camera inside one sweep: 320 held outdoor wildlife visits over
+2026-11-15..22, of which MegaDetector found an animal on 39 and by eye 29 were
+real (foxes, deer, the 11-15 01:49 coyote on peach tree). So a new track of a
+`[megadetector] classes` animal, on a camera not in `exclude-cameras`, at night,
+is confirmed on its first frame when MegaDetector scores an animal >=
+`min-score` on the same box. It can only confirm, never veto: it is blind to
+the cat seen from above in the garage (0.00-0.07) and erratic on Rufus in
+daylight, which is also why it is night-only and garage-excluded by default.
+
+`md_server.py` runs under its own venv (`~/md-venv`, megadetector 10.0.28)
+as launchd `com.brianegge.md-server`, model loaded, `POST /detect` on
+127.0.0.1:5060, log `~/aicam-data/md-server.log`. Down or slow (`timeout`,
+5 s) means "no": the sighting waits for the movement gate, as before.
+
+```
+[megadetector]
+enabled = true
+# url = http://127.0.0.1:5060/detect
+# classes = deer,fox,coyote,raccoon,rabbit,bobcat
+# min-score = 0.6   exclude-cameras = garage   dark-only = true   timeout = 5
+```
+
+Grep `confirmed by MegaDetector` for what it let through and `MegaDetector
+sees` for what fell short.
+
 ## Logs
 ```bash
 # View aicam logs

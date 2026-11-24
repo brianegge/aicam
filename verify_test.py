@@ -818,3 +818,40 @@ def test_no_ceiling_configured_asks_about_everything():
     cfg = config(classes="dog,deer")
     asked = run([pred("dog", score=0.99)], cfg, return_value=verdict("dog"))
     assert asked.call_count == 1
+
+
+def test_a_scene_hint_reaches_the_prompt_for_its_camera_only():
+    """2026-11-23 22:53: the front-entry doormat in infra-red is a pale square
+    on a dark mat, and the model called it "box on doormat" 0.95 every time.
+    Told about the mat, it said "nothing" 0.98 and still called the 09-23
+    parcel a package."""
+    cfg = config(classes="package", **{
+        "hint-package-front-entry": "The pale square on the dark mat is the doormat.",
+        "hint-package": "generic package hint"})["verify"]
+    assert verify.hint_for(cfg, "package", "front entry") == \
+        "The pale square on the dark mat is the doormat."
+    assert verify.hint_for(cfg, "package", "garage-l") == "generic package hint"
+    assert verify.hint_for(cfg, "fox", "front entry") == ""
+
+    p = pred("package", score=0.66)
+    cam = FakeCam("front entry")
+    with mock.patch.object(verify, "ask", return_value=verdict("nothing", note="flat doormat")) as asked:
+        verify.verify_predictions(cam, frame(), [p], config(classes="package", **{
+            "hint-package-front-entry": "The pale square on the dark mat is the doormat."}))
+    assert asked.call_args.kwargs["hint"] == "The pale square on the dark mat is the doormat."
+
+    body = {}
+
+    class R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": '{"label":"nothing","confidence":0.98}'}}]}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        body.update(json)
+        return R()
+
+    with mock.patch.object(verify.requests, "post", fake_post):
+        verify.ask(b"jpeg", "package", cfg, hint="The pale square on the dark mat is the doormat.")
+    assert "pale square on the dark mat" in body["messages"][0]["content"][0]["text"]

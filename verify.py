@@ -345,14 +345,32 @@ def _crop(image, box, context, max_edge, min_window=400):
     return buf.getvalue()
 
 
-def ask(image_bytes, tag, cfg, others=(), courier=False):
+def hint_for(cfg, tag, cam_name):
+    """Scene knowledge for one class, most specific first.
+
+    `hint-<class>-<camera>` (spaces in the camera name as dashes), then
+    `hint-<class>`. Written for the case the model cannot work out from the
+    crop alone: the front-entry snowman doormat lies on a larger dark mat, and
+    in infra-red its print vanishes, leaving a pale square on a dark one --
+    "box on doormat" at 0.95 on 2026-11-23 22:53, every time it was asked.
+    Told what that mat looks like at night it answered "nothing" 0.98, and
+    the 09-23 parcel still came back "package" 0.98.
+    """
+    return (cfg.get("hint-%s-%s" % (tag, cam_name.replace(" ", "-")))
+            or cfg.get("hint-%s" % tag) or "")
+
+
+def ask(image_bytes, tag, cfg, others=(), courier=False, hint=""):
     """The model's verdict, or None if it could not be obtained.
 
     others names the classes detected elsewhere in the same frame.
     courier adds the delivery-service question; see COURIER_PROMPT.
+    hint is scene knowledge appended to the question; see hint_for().
     """
     context = FRAME_CONTEXT % ", ".join(sorted(others)) if others else ""
     prompt = PROMPT % (tag, context, ", ".join(LABELS))
+    if hint:
+        prompt += "\n" + hint.strip()
     if courier:
         prompt += COURIER_PROMPT % ", ".join(COURIERS)
     body = {
@@ -519,7 +537,8 @@ def verify_predictions(cam, image, predictions, config):
                       and not q.get("hold_only")} - {p["tagName"]}
             got = ask(jpeg, p["tagName"], cfg, others,
                       courier=(p["tagName"] == "person"
-                               and cfg.getboolean("courier", True)))
+                               and cfg.getboolean("courier", True)),
+                      hint=hint_for(cfg, p["tagName"], cam.name))
         except Exception as e:
             reason = _failure_reason(e)
             p["unverified"] = reason

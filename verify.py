@@ -412,6 +412,14 @@ def _is_fresh(cam, p):
     return True
 
 
+def _track_of(cam, p):
+    """The track this detection continues, as _is_fresh() matched it."""
+    for prev in cam.prev_predictions.get(p["tagName"], []):
+        if bb_intersection_over_union(prev["boundingBox"], p["boundingBox"]) > 0.5:
+            return prev
+    return None
+
+
 def _cached(cam, p, iou_floor, now):
     entries = _suppressed.get(cam.name, [])
     entries[:] = [e for e in entries if e["expires"] > now]
@@ -502,8 +510,33 @@ def verify_predictions(cam, image, predictions, config):
     for p in predictions:
         if "ignore" in p or p.get("hold_only"):
             continue
-        if p["tagName"] not in classes or not _is_fresh(cam, p):
+        if p["tagName"] not in classes:
             continue
+        track = None
+        if not _is_fresh(cam, p):
+            # A tracked object was asked about once, when it arrived. One wrong
+            # answer then lasted as long as the track: the front-entry doormat
+            # in infra-red was "box on doormat" at 22:53 on 2026-11-23 and stayed
+            # a package for 2,300 sweeps, until a restart. recheck-minutes-<class>
+            # asks again on that schedule.
+            every = cfg.getfloat("recheck-minutes-%s" % p["tagName"], 0) * 60
+            if not every:
+                continue
+            hit = _cached(cam, p, iou_floor, now)
+            if hit:
+                # A recheck already found nothing here; keep the track starved
+                # until it expires rather than asking every sweep.
+                p["ignore"] = "verified: %s" % hit["label"]
+                continue
+            track = _track_of(cam, p)
+            if track is None:
+                continue
+            last = track.setdefault("verified_at", now)
+            if now - last < every:
+                continue
+            track["verified_at"] = now
+            logger.info("%s: %s tracked %.0f min since it was last checked; asking again",
+                        cam.name, p["tagName"], (now - last) / 60)
         bar = ceiling_for(p["tagName"])
         if (p.get("probability") or 0) >= bar:
             logger.info("%s: %s at %.2f is above the %.2f ceiling, not asking",
@@ -581,6 +614,7 @@ def verify_predictions(cam, image, predictions, config):
                     " " + got["courier"] if got.get("courier") else "",
                     got.get("note", ""), got.get("cost"))
         p["verified"] = got
+        p.setdefault("verified_at", now)  # a fresh p becomes the track
 
         # The detector sometimes puts two labels on one animal -- "coyote 0.86"
         # and "dog 0.54" on boxes differing in the third decimal, tree line
@@ -646,6 +680,12 @@ def verify_predictions(cam, image, predictions, config):
             logger.info("  %s below the %.2f floor, alerting anyway", label, needed)
             continue
         p["ignore"] = "verified: %s" % label
+        if track is not None:
+            # It was announced once as real; it is not, so its departure is
+            # not news either (detect.py skips retracted tracks on expiry).
+            track["retracted"] = label
+            logger.info("%s: the %s tracked here is %s after all; letting it lapse "
+                        "without a departure", cam.name, p["tagName"], label)
         _suppressed.setdefault(cam.name, []).append({
             "tag": p["tagName"], "box": dict(p["boundingBox"]), "label": label,
             "expires": now + ttl, "hits": 1})

@@ -717,6 +717,9 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         if e.get("unconfirmed"):
             # Never announced, so its departure is not news either.
             continue
+        if e.get("retracted"):
+            # Announced, then found by a verify recheck to be scenery.
+            continue
         if e["tagName"] in SILENT_DEPARTURES:
             continue
         if datetime.now() - e["start_time"] > timedelta(minutes=2) and e["age"] > 4:

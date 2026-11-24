@@ -855,3 +855,76 @@ def test_a_scene_hint_reaches_the_prompt_for_its_camera_only():
     with mock.patch.object(verify.requests, "post", fake_post):
         verify.ask(b"jpeg", "package", cfg, hint="The pale square on the dark mat is the doormat.")
     assert "pale square on the dark mat" in body["messages"][0]["content"][0]["text"]
+
+
+# --- rechecking a tracked object ---------------------------------------------
+
+def _tracked(cam, p, verified_at):
+    """p's box already tracked on cam, last checked at verified_at."""
+    track = dict(p, verified_at=verified_at)
+    cam.prev_predictions.setdefault(p["tagName"], []).append(track)
+    return track
+
+
+def _recheck_cfg(**over):
+    return config(classes="package", **dict({"recheck-minutes-package": "30"}, **over))
+
+
+def test_a_tracked_package_is_not_asked_again_before_it_is_due():
+    cam = FakeCam("front entry")
+    p = pred("package", score=0.7)
+    _tracked(cam, p, time.time() - 10 * 60)
+    with mock.patch.object(verify, "ask") as asked:
+        verify.verify_predictions(cam, frame(), [p], _recheck_cfg())
+    asked.assert_not_called()
+    assert "ignore" not in p
+
+
+def test_the_doormat_tracked_all_night_is_retracted_on_recheck():
+    """22:53 on 2026-11-23 the infra-red doormat was "box on doormat"; it
+    stayed a package for 2,300 sweeps and announced on Alexa at 05:55."""
+    cam = FakeCam("front entry")
+    p = pred("package", score=0.7)
+    track = _tracked(cam, p, time.time() - 31 * 60)
+    with mock.patch.object(verify, "ask", return_value=verdict("nothing", 0.98, "flat doormat")) as asked:
+        verify.verify_predictions(cam, frame(), [p], _recheck_cfg())
+    assert asked.call_count == 1
+    assert p["ignore"] == "verified: nothing"
+    assert track["retracted"] == "nothing"
+    # The next sweep, same box, still tracked: silenced from the cache, no call.
+    p2 = pred("package", score=0.72)
+    with mock.patch.object(verify, "ask") as asked:
+        verify.verify_predictions(cam, frame(), [p2], _recheck_cfg())
+    asked.assert_not_called()
+    assert p2["ignore"] == "verified: nothing"
+
+
+def test_a_real_parcel_survives_its_recheck():
+    cam = FakeCam("front entry")
+    p = pred("package", score=0.7)
+    track = _tracked(cam, p, time.time() - 31 * 60)
+    with mock.patch.object(verify, "ask", return_value=verdict("package", 0.98, "box on step")):
+        verify.verify_predictions(cam, frame(), [p], _recheck_cfg())
+    assert "ignore" not in p
+    assert "retracted" not in track
+    assert time.time() - track["verified_at"] < 5
+
+
+def test_a_track_from_before_rechecks_existed_waits_a_full_period():
+    cam = FakeCam("front entry")
+    p = pred("package", score=0.7)
+    track = dict(p)                       # no verified_at
+    cam.prev_predictions["package"] = [track]
+    with mock.patch.object(verify, "ask") as asked:
+        verify.verify_predictions(cam, frame(), [p], _recheck_cfg())
+    asked.assert_not_called()
+    assert "verified_at" in track
+
+
+def test_without_recheck_minutes_a_tracked_object_is_left_alone():
+    cam = FakeCam("front entry")
+    p = pred("package", score=0.7)
+    _tracked(cam, p, time.time() - 600 * 60)
+    with mock.patch.object(verify, "ask") as asked:
+        verify.verify_predictions(cam, frame(), [p], config(classes="package"))
+    asked.assert_not_called()

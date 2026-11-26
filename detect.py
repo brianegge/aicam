@@ -76,6 +76,17 @@ def add_centers(predictions):
 # two consecutive dips, and not a capture error.
 OBJECT_HOLD_SECONDS = 60
 
+# How long a track may live on hold_only detections alone. The hold above is
+# keyed by class, so one parked car keeps the whole class "recently seen", and
+# then any scrap of noise over HOLD_PROBABILITY on another spot sustains that
+# spot's old track indefinitely. On 2026-11-26 the left garage bay's track
+# began at 08:55 as the car pulled out and lived on 0.15-0.16 "vehicle" on the
+# empty bay for 35 minutes -- drawn on the dog alert at 09:30 as a car that was
+# not there -- because the Subaru in the right bay scored 0.90 throughout.
+# Ten minutes, not one: a real car can sit under its night threshold for
+# minutes in infra-red, and a track lost then comes back as a fresh arrival.
+HOLD_ONLY_SECONDS = 600
+
 # Two boxes this close are the same object, in the same place, that has not
 # moved. Compared against the box the track *started* on, not the previous
 # frame, so a slow drift cannot creep past it one frame at a time.
@@ -415,7 +426,14 @@ def track_predictions(valid_predictions, prev_predictions, new_predictions):
         for prev in prev_class:
             iou = bb_intersection_over_union(prev["boundingBox"], this_box)
             logger.debug(f"iou {this_name} = prev_box & this_box = {iou}")
+            if iou > 0.5 and p.get("hold_only") and (
+                    datetime.now() - prev.get("last_strong", prev["last_time"])
+            ).total_seconds() > HOLD_ONLY_SECONDS:
+                # Held up by noise alone for too long; let it expire.
+                continue
             if iou > 0.5:
+                if not p.get("hold_only"):
+                    prev["last_strong"] = datetime.now()
                 p["iou"] = iou
                 # Against where the track *began*: comparing with the previous
                 # frame would let an object drift across the whole scene while
@@ -449,6 +467,7 @@ def track_predictions(valid_predictions, prev_predictions, new_predictions):
                 continue
             p["start_time"] = datetime.now()
             p["last_time"] = datetime.now()
+            p["last_strong"] = p["start_time"]
             p["age"] = 0
             # Copied: prev["boundingBox"] is reassigned every match, and the
             # anchor has to keep describing where the track began.
@@ -666,6 +685,10 @@ def detect(cam, color_model, grey_model, vehicle_model, config, ha):
         else:
             im_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         for p in predictions:
+            if p.get("hold_only"):
+                # Under threshold, only keeping an existing track alive: not a
+                # detection anyone should see on the alert picture.
+                continue
             if "ignore" in p:
                 width = 2
             else:

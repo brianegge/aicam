@@ -599,3 +599,43 @@ def test_a_borderline_person_on_hold_is_not_counted():
     assert detect.counted({"tagName": "person"}, gate)
     assert detect.counted({"tagName": "dog", "unconfirmed": True}, gate)
     assert detect.counted({"tagName": "person", "unconfirmed": True}, None)
+
+
+# --- a track kept alive by holds alone ---------------------------------------
+
+def _held(prob=0.16):
+    p = _pred("vehicle", prob)
+    p["hold_only"] = True
+    return p
+
+
+def test_a_hold_bridges_a_short_dip():
+    track = _tracked(age=5)
+    track["last_strong"] = datetime.now() - timedelta(seconds=30)
+    prev = {"vehicle": [track]}
+    tracked, unmatched = track_predictions([_held()], prev, [])
+    assert len(tracked) == 1 and unmatched == []
+
+
+def test_noise_alone_cannot_keep_a_departed_car_tracked():
+    """2026-11-26: the left garage bay's track began at 08:55 as the car pulled
+    out and lived on 0.15-0.16 'vehicle' on the empty bay for 35 minutes,
+    because the car in the right bay kept the class 'recently seen'."""
+    track = _tracked(age=140)
+    track["last_strong"] = datetime.now() - timedelta(seconds=detect.HOLD_ONLY_SECONDS + 60)
+    prev = {"vehicle": [track]}
+    new = []
+    tracked, unmatched = track_predictions([_held()], prev, new)
+    assert tracked == []
+    assert len(unmatched) == 1 and new == []
+    assert track["age"] == 140  # not refreshed, so it expires
+
+
+def test_a_strong_detection_resets_the_hold_clock():
+    track = _tracked(age=5)
+    track["last_strong"] = datetime.now() - timedelta(hours=2)
+    prev = {"vehicle": [track]}
+    track_predictions([_pred("vehicle", 0.9)], prev, [])
+    assert (datetime.now() - track["last_strong"]).total_seconds() < 5
+    tracked, _ = track_predictions([_held()], prev, [])
+    assert len(tracked) == 1

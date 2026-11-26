@@ -79,10 +79,12 @@ OBJECT_HOLD_SECONDS = 60
 # How long a track may live on hold_only detections alone. The hold above is
 # keyed by class, so one parked car keeps the whole class "recently seen", and
 # then any scrap of noise over HOLD_PROBABILITY on another spot sustains that
-# spot's old track indefinitely. On 2026-11-26 the left garage bay's track
-# began at 08:55 as the car pulled out and lived on 0.15-0.16 "vehicle" on the
-# empty bay for 35 minutes -- drawn on the dog alert at 09:30 as a car that was
-# not there -- because the Subaru in the right bay scored 0.90 throughout.
+# spot's old track indefinitely. On 2026-11-26 the right bay (the Subaru's,
+# empty since it left at 05:40 -- the left of the inside camera's mirrored
+# picture) scored "vehicle" 0.71 for one frame at 08:55:26, when the house door
+# opened and the garage lights came on. That track then lived on 0.15-0.16 for
+# 35 minutes -- drawn on the dog alert at 09:30 as a car that was not there --
+# because the Mach-E in the left bay scored 0.90 throughout.
 # Ten minutes, not one: a real car can sit under its night threshold for
 # minutes in infra-red, and a track lost then comes back as a fresh arrival.
 HOLD_ONLY_SECONDS = 600

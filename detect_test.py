@@ -618,9 +618,10 @@ def test_a_hold_bridges_a_short_dip():
 
 
 def test_noise_alone_cannot_keep_a_departed_car_tracked():
-    """2026-11-26: the left garage bay's track began at 08:55 as the car pulled
-    out and lived on 0.15-0.16 'vehicle' on the empty bay for 35 minutes,
-    because the car in the right bay kept the class 'recently seen'."""
+    """2026-11-26: a one-frame 0.71 'vehicle' on the empty right garage bay,
+    when the house door opened and the lights came on at 08:55, lived on
+    0.15-0.16 for 35 minutes because the Mach-E in the left bay kept the
+    class 'recently seen'."""
     track = _tracked(age=140)
     track["last_strong"] = datetime.now() - timedelta(seconds=detect.HOLD_ONLY_SECONDS + 60)
     prev = {"vehicle": [track]}
